@@ -1,6 +1,7 @@
 {
   "highwayLength" : 0.01,
-  "highwayMaxAngle": 0.41887902047,
-  "normalLength": 0.001,
-  "twoStartSegment": true
+  "highwayMaxAngle": 0.15707963267,
+  "normalLength": 0.0033,
+  "twoStartSegment": true,
+  "populationThreshold": 0.08
 }

@@ -140,6 +140,6 @@ if __name__ == '__main__':
     #plt.imshow(data, cmap="gray")
 
     plt.axis('off')
-    plt.savefig("noise/simplex.png", bbox_inches='tight', transparent=True, pad_inches=0)
+    plt.savefig("textures/noise/simplex.png", bbox_inches='tight', transparent=True, pad_inches=0)
 
     plt.show()

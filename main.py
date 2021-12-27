@@ -28,6 +28,7 @@ class Segment:
         :return:
         # TODO check THAT THIS IS CORRECT VERY DANGEROUS DO BUGS
         # Have done some error checking this seems to work.
+        # Note to myself. I am never going to write this code again.
         """
 
         a = self.p.x - other.p.x  # x1 - x3
@@ -40,14 +41,11 @@ class Segment:
         determinant = (e * b - f * d)
 
         if -0.000001 <= determinant <= 0.000001:
-            # The line parallel we don't care if segments lie on each other producers in local constraint will handle that.
+            # The line parallel, this requires some more checking
             def distance(p1, p2):
                 return mt.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2)
 
             def is_between(p1, p3, p2):
-
-                suggestedDist = distance(p1, p3) + distance(p3, p2)
-
                 return - 0.000001 < (distance(p1, p3) + distance(p3, p2) - distance(p1, p2)) < 0.000001
 
             if is_between(self.p, other.q, self.q):
@@ -119,20 +117,49 @@ class SegmentsContainer:
     def __len__(self):
         return len(self.allSegments)
 
+    def getCloseSegments(self, segment):
+        """
+        bb = quads.BoundingBox(min_x=-1, min_y=-2, max_x=2, max_y=2)
+        tree.within_bb(bb)
+        :param segment:
+        :return:
+        """
+        sLength = config["highwayLength" if segment.highway else "normalLength"]
 
-class PopulationMap:
+        minX = segment.q.x - sLength
+        maxX = segment.q.x + sLength
+        minY = segment.q.Y - sLength
+        maxY = segment.q.Y + sLength
+        pointBB = qd.BoundingBox(minX, minY, maxX, maxY)
+        return self.tree.within_bb(pointBB)
 
-    def __init__(self):
-        self.map = np.array(Image.open("noise/simplex.png")).mean(axis=2)
+
+class Texture:
+
+    def __init__(self, textureName):
+        self.map = np.array(textureName).mean(axis=2)
         self.dims = self.map.shape
 
-    def populationOnRoad(self, segment):
-        # TODO here it should be scaled accordingly. Not that this code assumes segment is inside (0, 1)
-        pValues = (mt.floor(segment.p.x * self.dims[0]), mt.floor(segment.p.y * self.dims[1]))
-        qValues = (mt.floor(segment.q.x * self.dims[0]), mt.floor(segment.q.y * self.dims[1]))
-        halfValue = ((pValues[0] + qValues[0]) // 2, (pValues[1] + qValues[1]) // 2)
+    def getTextureCords(self, point):
+        return mt.floor(point.x * self.dims[0]), mt.floor(point.y * self.dims[1])
 
-        return (self.map[pValues] + self.map[qValues] + self.map[halfValue]) / 3.0
+    def sampleWholeSegment(self, segment):
+        # TODO here it should be scaled accordingly. Not that this code assumes segment is inside (0, 1)
+
+        pIndex = self.getTextureCords(segment.p)
+        qIndex = self.getTextureCords(segment.q)
+        halfIndex = ((pIndex[0] + qIndex[0]) // 2, (pIndex[1] + qIndex[1]) // 2)
+
+        return (self.map[pIndex] + self.map[qIndex] + self.map[halfIndex]) / 3.0
+
+    def sampleOnRoadEnd(self, segment):
+        # We only check the end of the road segment.
+        qX, qY = self.getTextureCords(segment.q)
+
+        qX = (max(qX - 2, 0), min(qX + 2, self.dims[0] - 1))
+        qY = (max(qY - 2, 0), min(qY + 2, self.dims[1] - 1))
+
+        return np.mean(self.map[qX[0]:qX[1], qY[0]:qY[1]])
 
 
 def segmentWithinLimit(segment):
@@ -184,7 +211,7 @@ def makeInitialSegments():
         return [Item(root, 0.0)]
 
 
-def applyLocalConstraints(minSegment, segments):
+def applyLocalConstraints(minSegment, segments, popMap):
     # + a quadtree in applyLocalConstraints
     """
     The localConstraints function executes the two following steps:
@@ -214,24 +241,42 @@ def applyLocalConstraints(minSegment, segments):
         • close to intersecting → extend street to form intersection
     :param minSegment:
     :param segments:
+    :param popMap: 
     :return:
-
-
     """""
     # TODO THis is the next important Step
     """
      The localConstraints function executes the two following steps:
         • check if the road segment ends inside or crosses an illegal area.
+        • search for intersection with other roads or for roads and crossings that are within a specified distance to the segment end.
+        
+        I suggest that we we first try check if the segment is in a illegal area. 
     """
 
-    if segmentWithinLimit(minSegment):
-        #  This feels reasonable. If segments is out border it should not be made
-        return False
-    if True:
-        return True
+    illegalArea = True
+
+    # TODO use a water map.
+    pass
+
+    # make checks if the area is okey
+
+    # THe area is okay, let's check if we need to connect to anything.
+
+    return False
 
 
 def globalGoalsGenerate(minSegment, popMap):
+    """
+    When an area with no population is reached, the streets stop growing
+
+    Roadpatt
+    :param minSegment:
+    :param popMap:
+    :return:
+    """
+    if popMap.populationOnRoadEnd(minSegment) <= config["populationThreshold"]:
+        pass
+
     return [("Segment", 0)]
 
 
@@ -240,14 +285,15 @@ def generateNetwork():
 
     maxNSegments = 200
     segments = SegmentsContainer()
-    popMap = PopulationMap()
+    popMap = Texture("textures/noise/simplex.png")
+    waterMap = Texture("")
     Q = PriorityQueue()
     Q.pushAll(makeInitialSegments())
 
     while (not Q.empty()) and (len(segments) < maxNSegments):
 
         minSegment = Q.pop()
-        accepted = applyLocalConstraints(minSegment, segments)
+        accepted = applyLocalConstraints(minSegment, segments, popMap)
         if accepted:
             segments.addSegment(minSegment)
 
@@ -267,8 +313,6 @@ if __name__ == '__main__':
     # generateNetwork()
 
     # generateNetwork()
-
-
     pass
 
     # Notes,
