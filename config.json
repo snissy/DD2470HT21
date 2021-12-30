@@ -1,7 +1,9 @@
 {
-  "highwayLength" : 0.01,
-  "highwayMaxAngle": 0.15707963267,
-  "normalLength": 0.0033,
+  "highwayLength" : 0.015,
+  "highwayMaxAngle": 0.15707,
+  "normalLength": 0.0113,
+  "connectCrossingThreshold": 0.0045,
+  "extendFactorForNewCrossing": 1.2,
   "twoStartSegment": true,
   "populationThreshold": 0.08
 }

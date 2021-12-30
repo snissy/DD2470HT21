@@ -128,3 +128,22 @@ if __name__ == '__main__':
     drawLine(p2, q2)
 
     plt.show()
+
+    p1 = qd.Point(0, 0)
+    q1 = qd.Point(1, 1)
+
+    seg1 = Segment(p1, q1, True)
+
+    p2 = qd.Point(0.5, 0.5)
+    q2 = qd.Point(1.5, 1.5)
+    seg2 = Segment(p2, q2, True)
+
+    intersection = seg1.intersection(seg2)
+
+    if intersection:
+        plt.plot(intersection.x, intersection.y, 'ro')
+
+    drawLine(p1, q1)
+    drawLine(p2, q2)
+
+    plt.show()

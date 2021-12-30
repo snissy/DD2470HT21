@@ -6,15 +6,33 @@ import json
 from PIL import Image
 import numpy as np
 import quads as qd
+import random as rd
+from matplotlib import pyplot as plt
+from quads import Point
+import functools
 
 config = json.loads(open("config.json", mode="r").read())
 
 
-@dataclass
+class ExtendedPoint(qd.Point):
+
+    def __init__(self, x, y, data=None):
+        super().__init__(x, y, data)
+
+    def distanceTo(self, other):
+        return mt.sqrt((self.x - other.x) ** 2 + (self.y - other.y) ** 2)
+
+
 class Segment:
-    p: qd.Point
-    q: qd.Point
+    p: ExtendedPoint
+    q: ExtendedPoint
     highway: bool
+
+    def __init__(self, p, q, highway=False):
+
+        self.p = p
+        self.q = q
+        self.highway = highway
 
     def intersection(self, other):
 
@@ -26,11 +44,9 @@ class Segment:
         other.q = (x4, y4)
         :param other:
         :return:
-        # TODO check THAT THIS IS CORRECT VERY DANGEROUS DO BUGS
         # Have done some error checking this seems to work.
         # Note to myself. I am never going to write this code again.
         """
-
         a = self.p.x - other.p.x  # x1 - x3
         b = other.p.y - other.q.y  # y3 - y4
         c = self.p.y - other.p.y  # y1 - y3
@@ -42,11 +58,9 @@ class Segment:
 
         if -0.000001 <= determinant <= 0.000001:
             # The line parallel, this requires some more checking
-            def distance(p1, p2):
-                return mt.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2)
 
             def is_between(p1, p3, p2):
-                return - 0.000001 < (distance(p1, p3) + distance(p3, p2) - distance(p1, p2)) < 0.000001
+                return - 0.000001 < (p1.distanceTo(p3) + p3.distanceTo(p2) - p1.distanceTo(p2)) < 0.000001
 
             if is_between(self.p, other.q, self.q):
                 return other.q
@@ -63,9 +77,23 @@ class Segment:
                 if 0 <= u <= 1:
                     newX = self.p.x + (self.q.x - self.p.x) * t
                     newY = self.p.y + (self.q.y - self.p.y) * t
-                    return qd.Point(newX, newY)
+                    return ExtendedPoint(newX, newY)
 
         return None
+
+    def getMidPoint(self):
+
+        midPoint = ExtendedPoint((self.p.x + self.q.x) / 2.0, (self.p.y + self.q.y) / 2.0)
+
+        return midPoint
+
+    def __eq__(self, other):
+
+        equals = abs(self.p.x - other.p.x) <= 0.000001
+        equals = equals and abs(self.p.y - other.p.y) <= 0.000001
+        equals = equals and abs(self.q.x - other.q.x) <= 0.000001
+
+        return equals and abs(self.q.y - other.q.y) <= 0.000001
 
 
 @dataclass
@@ -107,31 +135,29 @@ class SegmentsContainer:
 
     def __init__(self):
         self.allSegments = []
-        self.tree = qd.QuadTree((0, 0), 1, 1)
+        self.tree = qd.QuadTree((0.5, 0.5), 1, 1)
 
     def addSegment(self, s):
         self.allSegments.append(s)
-        self.tree.insert(s.p)
-        self.tree.insert(s.q)
+        midPoint = s.getMidPoint()
+        self.tree.insert(midPoint)
+        midPoint.data = s
 
     def __len__(self):
         return len(self.allSegments)
 
-    def getCloseSegments(self, segment):
-        """
-        bb = quads.BoundingBox(min_x=-1, min_y=-2, max_x=2, max_y=2)
-        tree.within_bb(bb)
-        :param segment:
-        :return:
-        """
-        sLength = config["highwayLength" if segment.highway else "normalLength"]
+    def getCloseSegments(self, point):
+        # ((5)^(1/2)/2) = 1.1180 <= 1.12
+        sLength = 1.5 * config["highwayLength"]
 
-        minX = segment.q.x - sLength
-        maxX = segment.q.x + sLength
-        minY = segment.q.Y - sLength
-        maxY = segment.q.Y + sLength
+        minX = point.x - sLength
+        maxX = point.x + sLength
+        minY = point.y - sLength
+        maxY = point.y + sLength
         pointBB = qd.BoundingBox(minX, minY, maxX, maxY)
-        return self.tree.within_bb(pointBB)
+
+        res = self.tree.within_bb(pointBB)
+        return res
 
 
 class Texture:
@@ -163,8 +189,6 @@ class Texture:
 
 
 def segmentWithinLimit(segment):
-    # TODO we don't have to check both points, this is made with safety within mind.
-    # THis can be removed later.
 
     pOk = (0 < segment.p.x < 1) and (0 < segment.p.y < 1)
     qOk = (0 < segment.q.x < 1) and (0 < segment.q.y < 1)
@@ -173,45 +197,21 @@ def segmentWithinLimit(segment):
 
 
 def makeInitialSegments():
-    """
-
-      // setup first segments in queue
-  const rootSegment = new Segment(
-    { x: 0, y: 0 },
-    { x: config.HIGHWAY_SEGMENT_LENGTH, y: 0 },
-    0,
-    { highway: !config.START_WI1qssz1§TH_NORMAL_STREETS },
-  );
-  if (!config.TWO_SEGMENTS_INITIALLY) return [rootSegment];
-  const oppositeDirection = rootSegment.clone();
-  const newEnd = {
-    x: rootSegment.start.x - config.HIGHWAY_SEGMENT_LENGTH,
-    y: oppositeDirection.end.y,
-  };
-  oppositeDirection.end = newEnd;
-  oppositeDirection.links.b.push(rootSegment);
-  rootSegment.links.b.push(oppositeDirection);
-  return [rootSegment, oppositeDirection];
-    :return:
-
-    """
-    # TODO note that you can store data in the pointObject which is good.
     # Here we set a segments to start in the middle at (1/2, 1/2)
 
-    root = Segment(qd.Point(0.5, 0.5), qd.Point(0.5 + config["highwayLength"], 0.5), True)
-
+    root = Segment(ExtendedPoint(0.5, 0.5), ExtendedPoint(0.5 + config["highwayLength"], 0.5), True)
     # make the points point the roadSegment object that they create
 
     if config["twoStartSegment"]:
 
-        secondRoot = Segment(root.p, qd.Point(0.5 - config["highwayLength"], 0.5), True)
+        secondRoot = Segment(ExtendedPoint(0.5, 0.5), ExtendedPoint(0.5 - config["highwayLength"], 0.5), True)
 
         return [Item(root, 0.0), Item(secondRoot, 0.0)]
     else:
         return [Item(root, 0.0)]
 
 
-def applyLocalConstraints(minSegment, segments, popMap):
+def applyLocalConstraints(minSegment, segments):
     # + a quadtree in applyLocalConstraints
     """
     The localConstraints function executes the two following steps:
@@ -244,7 +244,6 @@ def applyLocalConstraints(minSegment, segments, popMap):
     :param popMap: 
     :return:
     """""
-    # TODO THis is the next important Step
     """
      The localConstraints function executes the two following steps:
         • check if the road segment ends inside or crosses an illegal area.
@@ -252,14 +251,48 @@ def applyLocalConstraints(minSegment, segments, popMap):
         
         I suggest that we we first try check if the segment is in a illegal area. 
     """
-
-    illegalArea = True
-
+    # TODO implement legal Area checking
     # TODO use a water map.
-    pass
+    legalArea = segmentWithinLimit(minSegment)
+
+    if legalArea:
+        # The area is legal now let check if we can connect the segment
+        endPoint = minSegment.q
+        newPoint = None
+        closeSegments = segments.getCloseSegments(endPoint)
+        # Let's check if the segment intersect something
+        for cs in closeSegments:
+            csData = cs.data
+            # The segment is intersection existing road
+            newPoint = csData.intersection(minSegment)
+            if newPoint:
+                minSegment.q = newPoint
+                return True
+
+            # The end points is close to a crossing.
+            pDistance = csData.p.distanceTo(endPoint)
+            qDistance = csData.q.distanceTo(endPoint)
+
+            if pDistance <= config["connectCrossingThreshold"]:
+                minSegment.q = csData.p
+                return True
+            if qDistance <= config["connectCrossingThreshold"]:
+                minSegment.q = csData.q
+                return True
+
+            # Check if we can extend the road.
+            newQx = minSegment.p.x + (minSegment.q.x - minSegment.p.x) * config["extendFactorForNewCrossing"]
+            newQy = minSegment.p.y + (minSegment.q.y - minSegment.p.y) * config["extendFactorForNewCrossing"]
+            newQ = ExtendedPoint(newQx, newQy)
+
+            newPoint = csData.intersection(Segment(minSegment.p, newQ))
+            if newPoint:
+                minSegment.q = newPoint
+                return True
+
+        return True
 
     # make checks if the area is okey
-
     # THe area is okay, let's check if we need to connect to anything.
 
     return False
@@ -268,12 +301,13 @@ def applyLocalConstraints(minSegment, segments, popMap):
 def globalGoalsGenerate(minSegment, popMap):
     """
     When an area with no population is reached, the streets stop growing
-
-    Roadpatt
     :param minSegment:
     :param popMap:
     :return:
     """
+    # TODO this is next important thing to do.
+
+
     if popMap.populationOnRoadEnd(minSegment) <= config["populationThreshold"]:
         pass
 
@@ -283,7 +317,7 @@ def globalGoalsGenerate(minSegment, popMap):
 def generateNetwork():
     # road&query  ra = Road Attribute, qa = Query attribute, I guess?
 
-    maxNSegments = 200
+    maxNSegments = 250
     segments = SegmentsContainer()
     popMap = Texture("textures/noise/simplex.png")
     waterMap = Texture("")
@@ -309,19 +343,146 @@ def generateNetwork():
     #
 
 
-if __name__ == '__main__':
-    # generateNetwork()
+def drawLine(p1, p2, c='black'):
+    x_values = [p1.x, p2.x]
+    y_values = [p1.y, p2.y]
+    plt.plot(x_values, y_values, c)
 
-    # generateNetwork()
+
+def checkLineSegmentQuery():
+    for ii in range(5):
+        # generateNetwork()
+        nSegments = 5000
+        segments = SegmentsContainer()
+        p = ExtendedPoint(rd.random(), rd.random())
+        q = ExtendedPoint(rd.random(), rd.random())
+        qp = ExtendedPoint(q.x - p.x, q.y - p.y)
+        norm = (1 / (qp.x ** 2 + qp.y ** 2) ** (1 / 2)) * config["normalLength"]
+        q = ExtendedPoint(p.x + qp.x * norm, p.y + qp.y * norm)
+
+        startPoint = p
+        checkPoint = q
+        checkSegment = Segment(startPoint, checkPoint)
+
+        drawLine(startPoint, checkPoint, "blue")
+        plt.plot(checkPoint.x, checkPoint.y, 'ro', markersize=1)
+
+        for i in range(nSegments):
+            p = ExtendedPoint(rd.random(), rd.random())
+            q = ExtendedPoint(rd.random(), rd.random())
+            qp = ExtendedPoint(q.x - p.x, q.y - p.y)
+            norm = (1 / (qp.x ** 2 + qp.y ** 2) ** (1 / 2)) * config["normalLength"]
+            q = ExtendedPoint(p.x + qp.x * norm, p.y + qp.y * norm)
+            newSegment = Segment(p, q)
+            segments.addSegment(newSegment)
+
+        closeSegments = segments.getCloseSegments(checkPoint)
+        print("Number of close segments {}".format(len(closeSegments)))
+        for s in segments.allSegments:
+
+            ok = False
+            for closeS in closeSegments:
+
+                if closeS.data == s:
+
+                    if checkSegment.intersection(closeS.data):
+
+                        drawLine(s.p, s.q, "r")
+
+                    else:
+                        drawLine(s.p, s.q, "y")
+
+                    ok = True
+
+            if not ok:
+                drawLine(s.p, s.q, "g")
+
+        plt.show()
+
+
+def testDistanceFunction():
+    p1 = ExtendedPoint(0, 0)
+    p2 = ExtendedPoint(1, 1)
+
+    print(p1.distanceTo(p2))
+
+
+def testingLocalConstrains():
+    nLength = config["normalLength"]
+    nHalfLength = nLength/2.0
+    nfifthLength = nLength / 5.0
+    nsixthLength = nLength / 6.0
+
+
+    # Test 1
+    s1 = Segment(ExtendedPoint(0.5, 0), ExtendedPoint(0.5, nLength))
+    s2 = Segment(ExtendedPoint(0.5-nHalfLength, nHalfLength), ExtendedPoint(0.5+nHalfLength, nHalfLength))
+
+    drawLine(s1.p, s1.q, "red")
+    drawLine(s2.p, s2.q, "green")
+    plt.show()
+
+    segments = SegmentsContainer()
+    segments.addSegment(s2)
+
+    applyLocalConstraints(s1, segments)
+
+    drawLine(s1.p, s1.q, "red")
+    drawLine(s2.p, s2.q, "green")
+    plt.show()
+
+    # Test 2
+    s1 = Segment(ExtendedPoint(0.5, 0), ExtendedPoint(0.5, nLength))
+
+    s2 = Segment(ExtendedPoint(0.5 + nfifthLength, nLength+nfifthLength),
+                 ExtendedPoint(0.5 + nfifthLength + nLength, nLength+nfifthLength))
+
+    drawLine(s1.p, s1.q, "red")
+    drawLine(s2.p, s2.q, "green")
+    plt.show()
+
+    segments = SegmentsContainer()
+    segments.addSegment(s2)
+
+    applyLocalConstraints(s1, segments)
+
+    drawLine(s1.p, s1.q, "red")
+    drawLine(s2.p, s2.q, "green")
+    plt.show()
+
+    # Test 3
+    s1 = Segment(ExtendedPoint(0.5, 0), ExtendedPoint(0.5, nLength))
+    s2 = Segment(ExtendedPoint(0.5 - nHalfLength, nLength + nsixthLength), ExtendedPoint(0.5 + nHalfLength, nLength + nsixthLength))
+
+    drawLine(s1.p, s1.q, "red")
+    drawLine(s2.p, s2.q, "green")
+    plt.show()
+
+    segments = SegmentsContainer()
+    segments.addSegment(s2)
+
+    applyLocalConstraints(s1, segments)
+
+    drawLine(s1.p, s1.q, "red")
+    drawLine(s2.p, s2.q, "green")
+    plt.show()
+
+
     pass
 
+
+if __name__ == '__main__':
+    # generateNetwork()
+    # checkLineSegmentQuery()
     # Notes,
     # TODO If I have 4 days before the presentation is done I should try to create this code in c++
     # TODO add map size in config json that scales the range of the map
+
+    testingLocalConstrains()
     """
     December 26/12
     I'm going to work with a normalized range of the map. All values has to been in the range (0, 1). 
     I've have noted that it is only the highways That follow the different roadPatterns. 
 
-    
     """
+    testDistanceFunction()
