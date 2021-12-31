@@ -22,6 +22,12 @@ class ExtendedPoint(qd.Point):
     def distanceTo(self, other):
         return mt.sqrt((self.x - other.x) ** 2 + (self.y - other.y) ** 2)
 
+    def addVector(self, other):
+        newX = self.x + other.x
+        newY = self.y + other.y
+
+        return ExtendedPoint(newX, newY)
+
 
 class Segment:
     p: ExtendedPoint
@@ -33,6 +39,14 @@ class Segment:
         self.p = p
         self.q = q
         self.highway = highway
+
+    def getDirectionVector(self):
+
+        newPoint = ExtendedPoint(0, 0)
+        newPoint.x = self.q.x - self.p.x
+        newPoint.y = self.q.y - self.p.y
+
+        return newPoint
 
     def intersection(self, other):
 
@@ -170,7 +184,7 @@ class Texture:
         return mt.floor(point.x * self.dims[0]), mt.floor(point.y * self.dims[1])
 
     def sampleWholeSegment(self, segment):
-        # TODO here it should be scaled accordingly. Not that this code assumes segment is inside (0, 1)
+        # TODO in the original paper inverseDistance scale the values in favor for the end of the segment
 
         pIndex = self.getTextureCords(segment.p)
         qIndex = self.getTextureCords(segment.q)
@@ -188,8 +202,18 @@ class Texture:
         return np.mean(self.map[qX[0]:qX[1], qY[0]:qY[1]])
 
 
-def segmentWithinLimit(segment):
+def rotatePoint2D(point, angle):
+    # TODO cache these results of cos and sin calculations since they will be the same all the time.
+    cosTheta = mt.cos(angle)
+    sinTheta = mt.sin(angle)
 
+    newX = point.x * cosTheta - point.y * sinTheta
+    newY = point.x * sinTheta + point.y * cosTheta
+
+    return ExtendedPoint(newX, newY)
+
+
+def segmentWithinLimit(segment):
     pOk = (0 < segment.p.x < 1) and (0 < segment.p.y < 1)
     qOk = (0 < segment.q.x < 1) and (0 < segment.q.y < 1)
 
@@ -307,11 +331,53 @@ def globalGoalsGenerate(minSegment, popMap):
     """
     # TODO this is next important thing to do.
 
+    newSegments = []
 
     if popMap.populationOnRoadEnd(minSegment) <= config["populationThreshold"]:
+        return newSegments
+
+    # This is for the new Segment going in the forward direction.
+    if minSegment.highway:
+        # We should sample the surrounding area for the best highway Forward branch
         pass
 
-    return [("Segment", 0)]
+        # First make the forward segment.
+
+        def findSuitableNewHighwaySegment(segment, popMap):
+
+            n = config["numberOfNewHighwayChecking"]
+            angleStep = 2 * config["highwayMaxAngleTurn"] / n
+
+            directionVector = segment.getDirectionVector()
+
+            bestSegment = Segment(segment.p, segment.p.addVector(directionVector), True)
+            bestPopulation = -mt.inf
+
+            halfN = n // 2
+            for i in range(-halfN, halfN + 1):
+                angle = angleStep * i
+                newDirection = rotatePoint2D(directionVector, angle)
+                newSegment = Segment(segment.p, segment.p.addVector(newDirection), True)
+
+                popScore = popMap.sampleWholeSegment(newSegment)
+                if popScore > bestPopulation:
+                    bestSegment = newSegment
+                    bestPopulation = popScore
+
+            return bestSegment
+
+        newSegments.append(findSuitableNewHighwaySegment(segment, popMap))
+        # The branching segment with angle 90
+
+    else:
+        # The street is normal we don't need to sample the surrounding
+
+        # First make the forward segment.
+
+        # The branching segment with angle 90
+        pass
+
+    return newSegments
 
 
 def generateNetwork():
@@ -343,10 +409,10 @@ def generateNetwork():
     #
 
 
-def drawLine(p1, p2, c='black'):
+def drawLine(p1, p2, c='black', order=10):
     x_values = [p1.x, p2.x]
     y_values = [p1.y, p2.y]
-    plt.plot(x_values, y_values, c)
+    plt.plot(x_values, y_values, c, zorder=order)
 
 
 def checkLineSegmentQuery():
@@ -409,64 +475,57 @@ def testDistanceFunction():
 
 def testingLocalConstrains():
     nLength = config["normalLength"]
-    nHalfLength = nLength/2.0
+    nHalfLength = nLength / 2.0
     nfifthLength = nLength / 5.0
     nsixthLength = nLength / 6.0
 
-
     # Test 1
-    s1 = Segment(ExtendedPoint(0.5, 0), ExtendedPoint(0.5, nLength))
-    s2 = Segment(ExtendedPoint(0.5-nHalfLength, nHalfLength), ExtendedPoint(0.5+nHalfLength, nHalfLength))
+    s1 = Segment(ExtendedPoint(0.5, 0.0001), ExtendedPoint(0.5, nLength))
+    s2 = Segment(ExtendedPoint(0.5 - nHalfLength, nHalfLength), ExtendedPoint(0.5 + nHalfLength, nHalfLength))
 
     drawLine(s1.p, s1.q, "red")
     drawLine(s2.p, s2.q, "green")
-    plt.show()
 
     segments = SegmentsContainer()
     segments.addSegment(s2)
 
     applyLocalConstraints(s1, segments)
 
-    drawLine(s1.p, s1.q, "red")
-    drawLine(s2.p, s2.q, "green")
+    drawLine(s1.p, s1.q, "b")
     plt.show()
 
     # Test 2
-    s1 = Segment(ExtendedPoint(0.5, 0), ExtendedPoint(0.5, nLength))
+    s1 = Segment(ExtendedPoint(0.5, 0.0001), ExtendedPoint(0.5, nLength))
 
-    s2 = Segment(ExtendedPoint(0.5 + nfifthLength, nLength+nfifthLength),
-                 ExtendedPoint(0.5 + nfifthLength + nLength, nLength+nfifthLength))
+    s2 = Segment(ExtendedPoint(0.5 + nfifthLength, nLength + nfifthLength),
+                 ExtendedPoint(0.5 + nfifthLength + nLength, nLength + nfifthLength))
 
     drawLine(s1.p, s1.q, "red")
     drawLine(s2.p, s2.q, "green")
-    plt.show()
 
     segments = SegmentsContainer()
     segments.addSegment(s2)
 
     applyLocalConstraints(s1, segments)
 
-    drawLine(s1.p, s1.q, "red")
-    drawLine(s2.p, s2.q, "green")
+    drawLine(s1.p, s1.q, "b", 0)
     plt.show()
 
     # Test 3
-    s1 = Segment(ExtendedPoint(0.5, 0), ExtendedPoint(0.5, nLength))
-    s2 = Segment(ExtendedPoint(0.5 - nHalfLength, nLength + nsixthLength), ExtendedPoint(0.5 + nHalfLength, nLength + nsixthLength))
+    s1 = Segment(ExtendedPoint(0.5, 0.0001), ExtendedPoint(0.5, nLength))
+    s2 = Segment(ExtendedPoint(0.5 - nHalfLength, nLength + nsixthLength),
+                 ExtendedPoint(0.5 + nHalfLength, nLength + nsixthLength))
 
     drawLine(s1.p, s1.q, "red")
     drawLine(s2.p, s2.q, "green")
-    plt.show()
 
     segments = SegmentsContainer()
     segments.addSegment(s2)
 
     applyLocalConstraints(s1, segments)
 
-    drawLine(s1.p, s1.q, "red")
-    drawLine(s2.p, s2.q, "green")
+    drawLine(s1.p, s1.q, "b", 0)
     plt.show()
-
 
     pass
 
@@ -474,15 +533,13 @@ def testingLocalConstrains():
 if __name__ == '__main__':
     # generateNetwork()
     # checkLineSegmentQuery()
-    # Notes,
     # TODO If I have 4 days before the presentation is done I should try to create this code in c++
     # TODO add map size in config json that scales the range of the map
-
-    testingLocalConstrains()
     """
     December 26/12
     I'm going to work with a normalized range of the map. All values has to been in the range (0, 1). 
     I've have noted that it is only the highways That follow the different roadPatterns. 
-
     """
-    testDistanceFunction()
+
+    # testDistanceFunction()
+    checkLineSegmentQuery()

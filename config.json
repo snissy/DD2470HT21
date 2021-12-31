@@ -5,5 +5,9 @@
   "connectCrossingThreshold": 0.0045,
   "extendFactorForNewCrossing": 1.2,
   "twoStartSegment": true,
-  "populationThreshold": 0.08
+  "populationThreshold": 0.08,
+  "highwayDelayFactor": 0.5,
+  "normalDelayFactor": 0.085,
+  "numberOfNewHighwayChecking" : 5,
+  "highwayMaxAngleTurn": 0.1745
 }
