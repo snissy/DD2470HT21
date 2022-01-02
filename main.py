@@ -8,8 +8,8 @@ import numpy as np
 import quads as qd
 import random as rd
 from matplotlib import pyplot as plt
-from quads import Point
-import functools
+import imageio
+from tqdm import tqdm
 
 config = json.loads(open("config.json", mode="r").read())
 
@@ -28,7 +28,7 @@ class ExtendedPoint(qd.Point):
 
         return ExtendedPoint(newX, newY)
 
-    def SetLength(self, scale):
+    def setLength(self, scale):
         """
         The vector will get the length of the scale
         :param scale:
@@ -42,6 +42,16 @@ class ExtendedPoint(qd.Point):
         newX = self.x * mag
         newY = self.y * mag
         return ExtendedPoint(newX, newY)
+
+    def scale(self, s):
+        self.x *= s
+        self.y *= s
+
+    def __eq__(self, other):
+        return abs(self.x - other.x) <= 0.0000001 and abs(self.y - other.y) <= 0.0000001
+
+    def dotProduct(self, other):
+        return self.x * other.x + self.y * other.y
 
 
 class Segment:
@@ -116,6 +126,30 @@ class Segment:
 
         return midPoint
 
+    def getClosestPointOnSegment(self, point):
+
+        x1 = self.p.x
+        y1 = self.p.y
+        x2 = self.q.x
+        y2 = self.q.y
+        x3 = point.x
+        y3 = point.y
+
+        px = x2 - x1
+        py = y2 - y1
+        norm = px * px + py * py
+        u = max(0, min(1, ((x3 - x1) * px + (y3 - y1) * py) / float(norm)))
+
+        x = x1 + u * px
+        y = y1 + u * py
+
+        dx = x - x3
+        dy = y - y3
+
+        dist = (dx * dx + dy * dy) ** .5
+
+        return dist, ExtendedPoint(x, y), u
+
     def __eq__(self, other):
 
         equals = abs(self.p.x - other.p.x) <= 0.000001
@@ -159,6 +193,9 @@ class PriorityQueue:
     def empty(self):
         return len(self.__que) == 0
 
+    def getAllData(self):
+        return [item.data for item in self.__que]
+
 
 class SegmentsContainer:
 
@@ -196,7 +233,9 @@ class Texture:
         self.dims = self.map.shape
 
     def getTextureCords(self, point):
-        return mt.floor(point.x * self.dims[0]), mt.floor(point.y * self.dims[1])
+        x = mt.floor(point.x * self.dims[0])
+        y = mt.floor(point.y * self.dims[1])
+        return min(max(x, 0), self.dims[0] - 1), min(max(y, 0), self.dims[1] - 1)
 
     def sampleWholeSegment(self, segment):
         # TODO in the original paper inverseDistance scale the values in favor for the end of the segment
@@ -205,7 +244,7 @@ class Texture:
         qIndex = self.getTextureCords(segment.q)
         halfIndex = ((pIndex[0] + qIndex[0]) // 2, (pIndex[1] + qIndex[1]) // 2)
 
-        return (self.map[pIndex] + self.map[qIndex] + self.map[halfIndex]) / 3.0
+        return (self.map[pIndex] * (1 / 6) + self.map[halfIndex] * (2 / 6) + self.map[qIndex] * (3 / 6)) / 3.0
 
     def sampleOnRoadEnd(self, segment):
         # We only check the end of the road segment.
@@ -220,7 +259,7 @@ class Texture:
 def rotatePoint2D(point, angle):
     # TODO cache these results of cos and sin calculations since they will be the same all the time.
 
-    theta = (angle/360)*2*mt.pi
+    theta = (angle / 360) * 2 * mt.pi
     cosTheta = mt.cos(theta)
     sinTheta = mt.sin(theta)
 
@@ -289,8 +328,6 @@ def applyLocalConstraints(minSegment, segments):
      The localConstraints function executes the two following steps:
         • check if the road segment ends inside or crosses an illegal area.
         • search for intersection with other roads or for roads and crossings that are within a specified distance to the segment end.
-        
-        I suggest that we we first try check if the segment is in a illegal area. 
     """
     # TODO implement legal Area checking
     # TODO use a water map.
@@ -299,42 +336,106 @@ def applyLocalConstraints(minSegment, segments):
     if legalArea:
         # The area is legal now let check if we can connect the segment
         endPoint = minSegment.q
+        bestPoint = minSegment.q
+        bestPointDistance = mt.inf
+
+        prioValue = 0
         newPoint = None
         closeSegments = segments.getCloseSegments(endPoint)
         # Let's check if the segment intersect something
-        for cs in closeSegments:
-            csData = cs.data
+
+        for midPoint in closeSegments:
+            closeSegment = midPoint.data
+
+            # The minSegment will always be connected to its parent. This is okay but we need to check this.
+            # It could be the case that the start point have generated a new crossing or have connected to a
+            # crossing. Then we shouldn't accept this segment.
+            dist, correspondingLinePoint, tValue = closeSegment.getClosestPointOnSegment(minSegment.p)
+
+            if dist <= 0.0001:
+
+                d1 = closeSegment.getDirectionVector()
+                d2 = minSegment.getDirectionVector()
+                # TODO code repetition.
+                if tValue < 0.001:
+                    # TODO Config Value
+                    sameDirectionValue = 1 - d1.dotProduct(d2)
+
+                elif abs(tValue - 1) < 0.001:
+                    d1.scale(-1)
+                    sameDirectionValue = 1 - d1.dotProduct(d2)
+
+                else:
+                    return False
+                    sameDirectionValue = 1 - abs(d1.dotProduct(d2))
+
+                if sameDirectionValue < 0.15:
+                    # TODO CONFIG VALUE SHOULD BE HERE.
+                    return False
+
             # The segment is intersection existing road
-            if csData.q != minSegment.p:
-                newPoint = csData.intersection(minSegment)
-                if newPoint:  #
-                    if newPoint != minSegment.p:  # It's okey if to segments share first node.
-                        minSegment.q = newPoint
-                        return True
+            newPoint = closeSegment.intersection(minSegment)
+            if newPoint:
+                # TODO A line could intersect multiple lines. Then we need to pick the first/the closest intersection
+                if newPoint != minSegment.p:  # It's okey if to segments share first node.
 
-                # The end points is close to a crossing.
-                pDistance = csData.p.distanceTo(endPoint)
-                qDistance = csData.q.distanceTo(endPoint)
+                    distanceNewPoint = minSegment.p.distanceTo(newPoint)
+                    if prioValue == 3:
+                        if distanceNewPoint < bestPointDistance:
+                            # TODO remove code repetition
+                            bestPointDistance = distanceNewPoint
+                            bestPoint = newPoint
+                    else:
+                        bestPointDistance = distanceNewPoint
+                        bestPoint = newPoint
+                        prioValue = 3
 
+            # The end points is close to a crossing.
+
+            if prioValue < 3:
+
+                # TODO ADD limit crossing limit size.
+
+                pDistance = closeSegment.p.distanceTo(endPoint)
+                qDistance = closeSegment.q.distanceTo(endPoint)
                 if pDistance <= config["connectCrossingThreshold"]:
-                    minSegment.q = csData.p
-                    return True
+                    if prioValue == 2:
+                        if pDistance < bestPointDistance:
+                            bestPointDistance = pDistance
+                            bestPoint = closeSegment.p
+                    else:
+                        bestPointDistance = pDistance
+                        bestPoint = closeSegment.p
+                        prioValue = 2
+
                 if qDistance <= config["connectCrossingThreshold"]:
-                    minSegment.q = csData.q
-                    return True
+                    if prioValue == 2:
+                        if qDistance < bestPointDistance:
+                            bestPointDistance = qDistance
+                            bestPoint = closeSegment.q
+                    else:
+                        bestPointDistance = qDistance
+                        bestPoint = closeSegment.q
+                        prioValue = 2
 
                 # Check if we can extend the road.
-                newQx = minSegment.p.x + (minSegment.q.x - minSegment.p.x) * config["extendFactorForNewCrossing"]
-                newQy = minSegment.p.y + (minSegment.q.y - minSegment.p.y) * config["extendFactorForNewCrossing"]
-                newQ = ExtendedPoint(newQx, newQy)
 
-                newPoint = csData.intersection(Segment(minSegment.p, newQ))
-                if newPoint:  # TODO this could be a function
-                    if newPoint != minSegment.p:  # It's okey if to segments share first node.
-                        minSegment.q = newPoint
-                        return True
+                if prioValue < 1:
+                    dist, newPoint, tValue = closeSegment.getClosestPointOnSegment(endPoint)
+                    if dist < config["okToExtendFactor"]:
+                        if newPoint != minSegment.p:
+                            if prioValue == 1:
+                                if dist < bestPointDistance:
+                                    bestPointDistance = dist
+                                    bestPoint = newPoint
+                            else:
+                                bestPointDistance = dist
+                                bestPoint = newPoint
+                                prioValue = 1
 
-        return True, True
+        if minSegment.p.distanceTo(bestPoint) > config["normalLength"]*0.45:
+            minSegment.q = bestPoint
+            return True
 
     # make checks if the area is okey
     # THe area is okay, let's check if we need to connect to anything.
@@ -349,19 +450,21 @@ def globalGoalsGenerate(minItem, popMap):
     :param popMap:
     :return:
     """
-    # TODO this is next important thing to do.
+    # TODO we need to add some noise on the branching.
+    # FIX SOME OF THE BRANCHING LIKE ONLY BRANCH IN ONE DIRECTION either left or right.
 
     minSegment = minItem.data
     newSegments = []
 
-    if popMap.sampleOnRoadEnd(minSegment) <= config["populationThreshold"]:
+    if popMap.sampleOnRoadEnd(minSegment) <= config["populationThreshold"] + (0.15 if minSegment.highway else 0):
         return newSegments
 
     # This is for the new Segment going in the forward direction.
 
     directionVector = minSegment.getDirectionVector()
-    normalStreetDir = directionVector.SetLength(config["normalLength"])
+    normalStreetDir = directionVector.setLength(config["normalLength"])
 
+    # IT ONLY BRANCH AT ONE DIRECTION
     leftResult = rd.random()
     rightResult = rd.random()
 
@@ -417,8 +520,13 @@ def globalGoalsGenerate(minItem, popMap):
             newSegments.append(
                 Segment(minSegment.q, minSegment.q.addVector(rotatePoint2D(directionVector, -90)), False))
 
-    return [Item(s, minItem.prioValue + config["highwayDelayFactor"] if s.highway else config["normalDelayFactor"]) for
-            s in newSegments]
+    #TODO this is ugly
+    result = [Item(s, minItem.prioValue + (config["highwayDelayFactor"] if s.highway else config["normalDelayFactor"]))
+              for
+              s in newSegments]
+
+    result[0].prioValue -= 2
+    return result
 
 
 def generateNetwork():
@@ -431,9 +539,17 @@ def generateNetwork():
     Q = PriorityQueue()
     Q.pushAll(makeInitialSegments())
 
-    # while (not Q.empty()) and (len(segments) < maxNSegments):
+    #plt.xlim([0.0, 1 * popMap.dims[0]])
+    #plt.ylim([0.0, 1 * popMap.dims[1]])
 
-    for i in range(150):
+    # while (not Q.empty()) and (len(segments) < maxNSegments):
+    n = 2500
+    for i in tqdm(range(n)):
+        if Q.empty():
+            n = i
+            break
+        # if i == 208:
+        #     print("let's check something")
         minItem = Q.pop()
         minSegment = minItem.data
         accepted = applyLocalConstraints(minSegment, segments)
@@ -441,27 +557,50 @@ def generateNetwork():
             segments.addSegment(minSegment)
             # addZeroToThreeRoadsUsingGlobalGoals(Q, t+1, qa,ra)
             # We need to increment t+1, t will be minSegment.T
+            drawLine(minSegment.p, minSegment.q, popMap.dims, "#00ff00" if minSegment.highway else "#ff0000")
+
             Q.pushAll(globalGoalsGenerate(minItem, popMap))
+        #else:
+            #drawLine(minSegment.p, minSegment.q, popMap.dims, "#83a653" if minSegment.highway else "#a65353")
 
-        plt.xlim([0.1, 0.9])
-        plt.ylim([0.1, 0.9])
-        for s in segments.allSegments:
-            drawLine(s.p, s.q, "green" if s.highway else "red")
+        # All segments have been created. Time render them.
+        # drawSegments(segments, i)
+        # for s in Q.getAllData():drawLine(s.p, s.q, "orange")
         plt.title("Iteration: {}".format(i), fontsize=12)
-        plt.show()
-        plt.clf()
-    # All segments have been created. Time render them.
+        #plt.savefig("outputImg/roadGeneration-iter-{}".format(i))
 
+    plt.imshow(popMap.map, cmap="gray")
+    plt.show()
+
+    makeGif(n)
     # pDel[] branch delay and deletion,
     # pRoadAttr[] for road data, e.g. length, angle, etc  --> ra In blogpost, i think
     # pRuleAttr[] for rule-specific attributes  --> qa In blogpost, i think
     #
 
 
-def drawLine(p1, p2, c='black', order=10):
-    x_values = [p1.x, p2.x]
-    y_values = [p1.y, p2.y]
-    plt.plot(x_values, y_values, c, marker='o', zorder=order, markersize=2)
+def drawLine(p1, p2, dimsFactors, c='black', order=10):
+    x_values = [p1.x * dimsFactors[0], p2.x * dimsFactors[0]]
+    y_values = [p1.y * dimsFactors[1], p2.y * dimsFactors[1]]
+    plt.plot(x_values, y_values, c, marker='o', zorder=order, markersize=2.5)
+
+
+def drawSegments(segments, i):
+    plt.xlim([0.35, 0.65])
+    plt.ylim([0.35, 0.65])
+    for s in segments.allSegments:
+        drawLine(s.p, s.q, "green" if s.highway else "red")
+    plt.title("Iteration: {}".format(i), fontsize=12)
+    plt.savefig("outputImg/roadGeneration-iter-{}".format(i))
+    plt.clf()
+
+
+def makeGif(iterations):
+    fileNames = ["outputImg/roadGeneration-iter-{}.png".format(i) for i in range(iterations)]
+    with imageio.get_writer('outputImg/Final.gif', mode='I') as writer:
+        for filename in tqdm(fileNames):
+            image = imageio.imread(filename)
+            writer.append_data(image)
 
 
 def checkLineSegmentQuery():
@@ -580,8 +719,16 @@ def testingLocalConstrains():
 
 
 if __name__ == '__main__':
-    rd.seed(10)
+
+    # for i in range(100):
+    #     print(i)
+    #     rd.seed(i)
+    #     generateNetwork()
+
+    rd.seed(1)
     generateNetwork()
+
+
     # checkLineSegmentQuery()
     # TODO If I have 4 days before the presentation is done I should try to create this code in c++
     # TODO add map size in config json that scales the range of the map

@@ -1,14 +1,14 @@
 {
-  "highwayLength" : 0.015,
+  "highwayLength" : 0.03,
   "normalLength": 0.0113,
   "connectCrossingThreshold": 0.0025,
-  "extendFactorForNewCrossing": 1.2,
+  "okToExtendFactor":  0.0020,
   "twoStartSegment": true,
-  "populationThreshold": 0.08,
-  "highwayDelayFactor": 1.5,
+  "populationThreshold": 0.2,
+  "highwayDelayFactor": 3,
   "normalDelayFactor": 10,
   "numberOfNewHighwayChecking" : 5,
-  "highwayMaxAngleTurn": 10,
-  "highwayNewBranchProbability": 0.15,
-  "normalNewBranchProbability": 0.5
+  "highwayMaxAngleTurn": 20,
+  "highwayNewBranchProbability": 0.025,
+  "normalNewBranchProbability": 0.6
 }
