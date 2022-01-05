@@ -127,11 +127,12 @@ class SimplexNoiseGrid:
 
 
 if __name__ == '__main__':
-    t = SimplexNoiseGrid(100, 100)
+    t = SimplexNoiseGrid(250, 250)
     data = t.getData()
 
     # Normalised [0,1]
     data = (data - np.min(data)) / np.ptp(data)
+    data = np.power(data, 1.85)
     plt.imshow(data, cmap="gray")
 
     # data = np.exp(data-1)*np.abs(np.sin(data*2*np.pi*8))
