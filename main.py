@@ -9,11 +9,10 @@ import quads as qd
 import random as rd
 from matplotlib import pyplot as plt
 import imageio
-from scipy import ndimage
-from scipy.interpolate import griddata
 from tqdm import tqdm
 import cProfile as profile
 import time as tm
+import cv2
 
 config = json.loads(open("config.json", mode="r").read())
 
@@ -203,7 +202,6 @@ class PriorityQueue:
 
 
 class SegmentsContainer:
-
     sLength = 1 * config["highwayLength"]
 
     def __init__(self):
@@ -235,9 +233,6 @@ class SegmentsContainer:
 
 
 class Texture:
-    # TODO CONFIG VALUE
-    sampleSize = 10
-    tRange = 1 / (np.linspace(10, 1, sampleSize))
 
     def __init__(self, textureName):
         self.map = np.array(Image.open(textureName)).mean(axis=2)
@@ -297,59 +292,22 @@ def segmentWithinLimit(segment):
 def makeInitialSegments():
     # Here we set a segments to start in the middle at (1/2, 1/2)
 
-    root = Segment(ExtendedPoint(0.5, 0.5), ExtendedPoint(0.5 + config["highwayLength"], 0.5), True)
+    root = Segment(ExtendedPoint(0.5, 0.5), ExtendedPoint(0.5, 0.5 + config["highwayLength"]), True)
     # make the points point the roadSegment object that they create
 
     if config["twoStartSegment"]:
 
-        secondRoot = Segment(ExtendedPoint(0.5, 0.5), ExtendedPoint(0.5 - config["highwayLength"], 0.5), True)
+        secondRoot = Segment(ExtendedPoint(0.5, 0.5), ExtendedPoint(0.5, 0.5 - config["highwayLength"]), True)
 
         return [Item(root, 0.0), Item(secondRoot, 0.0)]
     else:
         return [Item(root, 0.0)]
 
 
-def applyLocalConstraints(minSegment, segments):
-    # + a quadtree in applyLocalConstraints
-    """
-    The localConstraints function executes the two following steps:
+def applyLocalConstraints(minSegment, segments, legalAreaMap):
 
-        • check if the road segment ends inside or crosses an illegal area.
-
-        • search for intersection with other roads or for roads and crossings that are within a specified distance to the segment end.
-
-        If the first check determines that the road end is inside water, a park or another illegal area,
-        the system tries to readjust the values for the road segment in the following ways.
-
-        • Prune the segment length up to a certain factor so that it fits inside the legal area of the starting point.
-        • Rotate the segment within a maximal angle until it is completely inside the legal area. This allows the creation of roads that follow a coastline or a park boundary.
-        • Highways are allowed to cross illegal area up to a specified length.
-
-        The generated highway segment is flagged. At the geometry creation stage it can then be replaced by e.g. a bridge, or two tunnel entrances on both sides.
-
-        Once all road ends are checked for being inside legal territory,
-        the system now scans the surrounding of the road ends for other road to form crossings and intersections.
-
-
-        If the localConstraints function finds a street within the given radius of the end of a segment it can modify
-        the parameters for the following events illustrated in figure 8:
-
-        • two streets intersect → generate a crossing.
-        • ends close to an existing crossing → extend street, to reach the crossing.
-        • close to intersecting → extend street to form intersection
-    :param minSegment:
-    :param segments:
-    :param popMap: 
-    :return:
-    """""
-    """
-     The localConstraints function executes the two following steps:
-        • check if the road segment ends inside or crosses an illegal area.
-        • search for intersection with other roads or for roads and crossings that are within a specified distance to the segment end.
-    """
-    # TODO use a water map.
-
-    legalArea = segmentWithinLimit(minSegment)
+    legalArea = segmentWithinLimit(minSegment) and (legalAreaMap.sampleOnPoint(minSegment.q) > 0.4)
+    # Alter segment somewhat if it doesn't fit
 
     if config["onlyHighway"] and not minSegment.highway:
         return False
@@ -369,6 +327,7 @@ def applyLocalConstraints(minSegment, segments):
 
         if config["iteration"] == config["iterationStop"]:
             # TODO REMOVE FOR BENCH
+
             plt.clf()
             drawLine(minSegment.p, minSegment.q, (1, 1), "blue")
             m = minSegment.getMidPoint()
@@ -531,9 +490,6 @@ def globalGoalsGenerate(minItem, popMap):
     :param popMap:
     :return:
     """
-    # TODO we need to add some noise on the branching.
-    # FIX SOME OF THE BRANCHING LIKE ONLY BRANCH IN ONE DIRECTION either left or right.
-
     minSegment = minItem.data
     newSegments = []
 
@@ -546,10 +502,9 @@ def globalGoalsGenerate(minItem, popMap):
 
     branchResult = rd.random()
     dirResult = rd.random()
-    # TODO maybe we want branching in both directions
+    angleResult = (90 + (rd.uniform(-1, 1) * config["branchingNoise"])) * (-1 if rd.random() <= 0.5 else 1)
     if minSegment.highway:
-        # We should sample the surrounding area for the best highway Forward branch
-        # First make the forward segment.
+
         def findSuitableNewHighwaySegment(startPoint, dirVector, pMap):
 
             n = config["numberOfNewHighwayChecking"]
@@ -573,41 +528,23 @@ def globalGoalsGenerate(minItem, popMap):
 
         newSegments.append(findSuitableNewHighwaySegment(minSegment.q, directionVector, popMap))
 
-        # The branching segment with angle 90
-
         if branchResult < config["highwayNewBranchProbability"]:
-
-            if dirResult <= 0.5:
-                newSegments.append(
-                    Segment(minSegment.q, minSegment.q.addVector(rotatePoint2D(directionVector, 90)), True))
-            else:
-                newSegments.append(
-                    Segment(minSegment.q, minSegment.q.addVector(rotatePoint2D(directionVector, -90)), True))
+            newSegments.append(
+                Segment(minSegment.q, minSegment.q.addVector(rotatePoint2D(directionVector, angleResult)), True))
 
         else:
             if branchResult < config["normalNewBranchProbability"]:
-
                 normalStreetDir = directionVector.setLength(config["normalLength"])
 
-                if dirResult <= 0.5:
-                    newSegments.append(
-                        Segment(minSegment.q, minSegment.q.addVector(rotatePoint2D(normalStreetDir, 90)), False))
-                else:
-                    newSegments.append(
-                        Segment(minSegment.q, minSegment.q.addVector(rotatePoint2D(normalStreetDir, -90)), False))
+                newSegments.append(
+                    Segment(minSegment.q, minSegment.q.addVector(rotatePoint2D(normalStreetDir, angleResult)), False))
 
     else:
         # The street is normal we don't need to sample the surrounding
         newSegments.append(Segment(minSegment.q, minSegment.q.addVector(directionVector)))
-
         if branchResult < config["normalNewBranchProbability"]:
-
-            if dirResult <= 0.5:
-                newSegments.append(
-                    Segment(minSegment.q, minSegment.q.addVector(rotatePoint2D(directionVector, 90)), False))
-            else:
-                newSegments.append(
-                    Segment(minSegment.q, minSegment.q.addVector(rotatePoint2D(directionVector, -90)), False))
+            newSegments.append(
+                Segment(minSegment.q, minSegment.q.addVector(rotatePoint2D(directionVector, angleResult)), False))
 
     result = [Item(s, minItem.prioValue + (config["highwayDelayFactor"] if s.highway else config["normalDelayFactor"]))
               for s in newSegments]
@@ -617,12 +554,17 @@ def globalGoalsGenerate(minItem, popMap):
 
 def generateNetwork():
     # road&query  ra = Road Attribute, qa = Query attribute, I guess?
-    startTime = tm.time()
+
     maxNSegments = config["numberOfSegments"]
     segments = SegmentsContainer()
     popMap = Texture("textures/noise/simplex.png")
-    waterMap = Texture("textures/water/w1.png")
+    waterMap = Texture("textures/water/stockHolmMask.png")
     Q = PriorityQueue()
+
+    plt.imshow(cv2.resize(waterMap.map, popMap.map.shape), cmap="gray")
+    #plt.imshow(np.multiply(popMap.map, cv2.resize(waterMap.map, popMap.map.shape)), cmap="gray")
+
+    startTime = tm.time()
     Q.pushAll(makeInitialSegments())
 
     # plt.xlim([248, 272])
@@ -640,13 +582,15 @@ def generateNetwork():
 
         minItem = Q.pop()
         minSegment = minItem.data
-        accepted = applyLocalConstraints(minSegment, segments)
+        accepted = applyLocalConstraints(minSegment, segments, waterMap)
         if accepted:
             segments.addSegment(minSegment)
             # addZeroToThreeRoadsUsingGlobalGoals(Q, t+1, qa,ra)
             # We need to increment t+1, t will be minSegment.T
 
-            drawLine(minSegment.p, minSegment.q, (popMap.dimX, popMap.dimY), "#087800" if minSegment.highway else "#ffaa00")
+            if config["gifModeOn"]:
+                args = ("#087800", 5) if minSegment.highway else ("#ffaa00", 1)
+                drawLine(minSegment.p, minSegment.q, (popMap.dimX, popMap.dimY), *args)
 
             Q.pushAll(globalGoalsGenerate(minItem, popMap))
         #
@@ -654,11 +598,11 @@ def generateNetwork():
             if config["drawNoneAcceptableSegments"]:
                 if config["onlyHighway"]:
                     if minSegment.highway:
-                        drawLine(minSegment.p, minSegment.q, (popMap.dimX, popMap.dimY),
-                                 "#83a653" if minSegment.highway else "#a65353")
+                        args = ("#087800", 5)
+                        drawLine(minSegment.p, minSegment.q, (popMap.dimX, popMap.dimY), *args)
                 else:
-                    drawLine(minSegment.p, minSegment.q, (popMap.dimX, popMap.dimY),
-                             "#83a653" if minSegment.highway else "#a65353")
+                    args = ("#707d40", 5) if minSegment.highway else ("#ff4d00", 1)
+                    drawLine(minSegment.p, minSegment.q, (popMap.dimX, popMap.dimY), *args)
 
         # All segments have been created. Time render them.
         # drawSegments(segments, i)
@@ -672,7 +616,11 @@ def generateNetwork():
         #     plt.show()
 
     print("The system generated the network on {} seconds".format((round(tm.time() - startTime, 3))))
-    plt.imshow(popMap.map, cmap="gray")
+
+    if not config["gifModeOn"]:
+        for s in segments.allSegments:
+            drawLine(s.p, s.q, (popMap.dimX, popMap.dimY), "#087800" if s.highway else "#ffaa00")
+
     plt.show()
 
     if config["gifModeOn"]:
@@ -683,10 +631,10 @@ def generateNetwork():
     #
 
 
-def drawLine(p1, p2, dimsFactors, c='black', order=10):
+def drawLine(p1, p2, dimsFactors, c='black', order=10, width=1.5):
     x_values = [p1.x * dimsFactors[0], p2.x * dimsFactors[0]]
     y_values = [p1.y * dimsFactors[1], p2.y * dimsFactors[1]]
-    plt.plot(x_values, y_values, c, marker='o', zorder=order, markersize=3.5)
+    plt.plot(x_values, y_values, c, marker='o', zorder=order, markersize=config["markerSize"], linewidth=width)
 
 
 def drawSegments(segments, i):
@@ -853,22 +801,19 @@ if __name__ == '__main__':
     #     print(i)
     #     rd.seed(i)
     #     generateNetwork()
-    # TODO THE TEXTURE IS NOT NORMALIZED
 
-    rd.seed(1)
-
+    rd.seed(config["seed"])
+    generateNetwork()
     # testingLocalConstrains2()
 
-    # In outer section of code
-    pr = profile.Profile()
-    pr.disable()
-
-    # In section you want to profile
-    pr.enable()
-
-    generateNetwork()
-
-    pr.disable()
-
-    # Back in outer section of code
-    pr.dump_stats('profile.pstat')
+    # # In outer section of code
+    # pr = profile.Profile()
+    # pr.disable()
+    #
+    # # In section you want to profile
+    # pr.enable()
+    #
+    # pr.disable()
+    #
+    # # Back in outer section of code
+    # pr.dump_stats('profile.pstat')

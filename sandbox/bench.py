@@ -5,20 +5,27 @@ from multiprocessing import pool
 
 def countFunc(test):
     sum = 0
-    for i in range(100000):
+    for i in range(1000):
         sum += i
 
     return sum
 
 
 if __name__ == '__main__':
-    startT = tm.time()
-
     p = pool.Pool()
 
-    p.map(countFunc, range(2000))
+    startT = tm.time()
 
-    print(tm.time() - startT)
+    for i in tqdm(range(5000)):
+        t = list(p.map(countFunc, range(10)))
+
+    print("The pool Object time {}".format(tm.time() - startT, 5))
+    p.close()
+    startT = tm.time()
+    for i in tqdm(range(5000)):
+        t = list(map(countFunc, range(10)))
+
+    print("The pool Object time {}".format(tm.time() - startT, 5))
 
     # Single thread
 
