@@ -132,7 +132,7 @@ if __name__ == '__main__':
 
     # Normalised [0,1]
     data = (data - np.min(data)) / np.ptp(data)
-    data = np.power(data, 1.85)
+    data = np.power(data, 0.75)
     plt.imshow(data, cmap="gray")
 
     # data = np.exp(data-1)*np.abs(np.sin(data*2*np.pi*8))

@@ -16,6 +16,8 @@ import cv2
 
 config = json.loads(open("config.json", mode="r").read())
 
+clamp = lambda x, l, u: l if x < l else u if x > u else x
+
 
 class ExtendedPoint(qd.Point):
 
@@ -32,7 +34,7 @@ class ExtendedPoint(qd.Point):
         return ExtendedPoint(newX, newY)
 
     def getMagnitude(self):
-        return (self.x ** 2 + self.y ** 2) ** (1 / 2)
+        return (self.x ** 2 + self.y ** 2) ** .5
 
     def setLength(self, scale):
         """
@@ -40,14 +42,16 @@ class ExtendedPoint(qd.Point):
         :param scale:
         :return:
         """
-        if abs(self.x) <= 0.0000001 and abs(self.y) <= 0.0000001:
+
+        mag = self.getMagnitude()
+        if mag <= 0.000001:
             print("WARNING: You get set length on zero vector")
             raise Exception("You get set length on zero Vector")
 
-        mag = scale / (self.getMagnitude())
-        newX = self.x * mag
-        newY = self.y * mag
-        return ExtendedPoint(newX, newY)
+        mag = scale / mag
+        self.scale(mag)
+
+        return self
 
     def scale(self, s):
         self.x *= s
@@ -86,8 +90,8 @@ class Segment:
         other.q = (x4, y4)
         :param other:
         :return:
-        # Have done some error checking this seems to work.
         # Note to myself. I am never going to write this code again.
+        # NEVER EVER WRITE THIS CODE AGAIN! OR USE A LIBRARY
         """
 
         a = self.p.x - other.p.x  # x1 - x3
@@ -99,20 +103,20 @@ class Segment:
 
         determinant = (e * b - f * d)
 
-        if -0.000001 <= determinant <= 0.000001:
+        if abs(determinant) <= 0.000001:
             # The line parallel, this requires some more checking
 
             def is_between(p1, p3, p2):
                 return abs((p1.distanceTo(p3) + p3.distanceTo(p2) - p1.distanceTo(p2))) < 0.000001
 
-            if is_between(self.p, other.q, self.q):
-                return other.q
             if is_between(self.p, other.p, self.q):
-                return other.p
-
-            return None
+                return other.p, 0 if self.p.distanceTo(other.p) < self.q.distanceTo(other.p) else 1, 0
+            if is_between(self.p, other.q, self.q):
+                return other.q, 0 if self.p.distanceTo(other.q) < self.q.distanceTo(other.q) else 1, 1
 
         else:
+            # t for self Line
+            # u for other Line
             t = (a * b - c * d) / determinant
             if 0 <= t <= 1:
                 u = (a * f - c * e) / determinant
@@ -120,9 +124,9 @@ class Segment:
                 if 0 <= u <= 1:
                     newX = self.p.x + (self.q.x - self.p.x) * t
                     newY = self.p.y + (self.q.y - self.p.y) * t
-                    return ExtendedPoint(newX, newY)
+                    return ExtendedPoint(newX, newY), t, u
 
-        return None
+        return False, None, None
 
     def getMidPoint(self):
 
@@ -142,7 +146,7 @@ class Segment:
         px = x2 - x1
         py = y2 - y1
         norm = px * px + py * py
-        u = max(0, min(1, ((x3 - x1) * px + (y3 - y1) * py) / float(norm)))
+        u = max(0, min(1, ((x3 - x1) * px + (y3 - y1) * py) / norm))
 
         x = x1 + u * px
         y = y1 + u * py
@@ -202,7 +206,8 @@ class PriorityQueue:
 
 
 class SegmentsContainer:
-    sLength = 1 * config["highwayLength"]
+    highwaySearchLength = 1 * config["highwayLength"]
+    normalSearchLength = (config["highwayLength"] / 2) + (config["normalLength"] / 2)
 
     def __init__(self):
         self.allSegments = []
@@ -219,13 +224,13 @@ class SegmentsContainer:
 
     def getCloseSegments(self, segment):
         # ((5)^(1/2)/2) = 1.1180 <= 1.12
-
         point = segment.getMidPoint()
+        sLength = self.highwaySearchLength if segment.highway else self.normalSearchLength
 
-        minX = point.x - self.sLength
-        maxX = point.x + self.sLength
-        minY = point.y - self.sLength
-        maxY = point.y + self.sLength
+        minX = point.x - sLength
+        maxX = point.x + sLength
+        minY = point.y - sLength
+        maxY = point.y + sLength
         pointBB = qd.BoundingBox(minX, minY, maxX, maxY)
 
         res = self.tree.within_bb(pointBB)
@@ -234,10 +239,14 @@ class SegmentsContainer:
 
 class Texture:
 
-    def __init__(self, textureName):
-        self.map = np.array(Image.open(textureName)).mean(axis=2)
-        # Normalizing the value in p(i,j) e [0, 1]
-        self.map = (self.map - np.min(self.map)) / np.ptp(self.map)
+    def __init__(self, textureName=None):
+
+        if textureName:
+            self.map = np.array(Image.open(textureName)).mean(axis=2)
+            # Normalizing the value in p(i,j) e [0, 1]
+            self.map = (self.map - np.min(self.map)) / np.ptp(self.map)
+        else:
+            self.map = np.ones((100, 100))
 
         dimY, dimX = self.map.shape
         self.dimX = dimX - 1
@@ -289,6 +298,25 @@ def segmentWithinLimit(segment):
     return pOk and qOk
 
 
+def drawApplyLocalCase(minSegment, closeSegments):
+    plt.clf()
+    drawLine(minSegment.p, minSegment.q, (1, 1), "blue")
+    m = minSegment.getMidPoint()
+    plt.plot(m.x, m.y, "blue", marker='o', markersize=3)
+    for midPoint in closeSegments:
+        closeSegment = midPoint.data
+        color = "#448700" if closeSegment.highway else "#ffaa00"
+        drawLine(closeSegment.p, closeSegment.q, (1, 1), color)
+        m = closeSegment.getMidPoint()
+        plt.plot(m.x, m.y, color, marker='o', markersize=3)
+
+        dirPoint = closeSegment.getDirectionVector().setLength(0.005)
+        dirPoint.x += closeSegment.p.x
+        dirPoint.y += closeSegment.p.y
+        plt.plot(dirPoint.x, dirPoint.y, "red", marker='o', markersize=3, zorder=12)
+    plt.show()
+
+
 def makeInitialSegments():
     # Here we set a segments to start in the middle at (1/2, 1/2)
 
@@ -305,15 +333,20 @@ def makeInitialSegments():
 
 
 def applyLocalConstraints(minSegment, segments, legalAreaMap):
-
     legalArea = segmentWithinLimit(minSegment) and (legalAreaMap.sampleOnPoint(minSegment.q) > 0.4)
     # Alter segment somewhat if it doesn't fit
 
     if config["onlyHighway"] and not minSegment.highway:
+        #TODO REMOVE BEFORE BENCH
         return False
 
     if legalArea:
         # The area is legal now let check if we can connect the segment
+
+        closeSegments = segments.getCloseSegments(minSegment)
+
+        if len(closeSegments) == 1:
+            return True
 
         segmentLength = config["highwayLength" if minSegment.highway else "normalLength"]
 
@@ -321,81 +354,31 @@ def applyLocalConstraints(minSegment, segments, legalAreaMap):
         bestPointDistance = mt.inf
 
         prioValue = 0
-        nConnectionToStreets = 0
-
-        closeSegments = segments.getCloseSegments(minSegment)
-
-        if config["iteration"] == config["iterationStop"]:
-            # TODO REMOVE FOR BENCH
-
-            plt.clf()
-            drawLine(minSegment.p, minSegment.q, (1, 1), "blue")
-            m = minSegment.getMidPoint()
-            plt.plot(m.x, m.y, "blue", marker='o', markersize=3)
-            for midPoint in closeSegments:
-                closeSegment = midPoint.data
-                color = "#448700" if closeSegment.highway else "#ffaa00"
-                drawLine(closeSegment.p, closeSegment.q, (1, 1), color)
-                m = closeSegment.getMidPoint()
-                plt.plot(m.x, m.y, color, marker='o', markersize=3)
-
-                dirPoint = closeSegment.getDirectionVector().setLength(0.005)
-                dirPoint.x += closeSegment.p.x
-                dirPoint.y += closeSegment.p.y
-                plt.plot(dirPoint.x, dirPoint.y, "red", marker='o', markersize=3, zorder=12)
-
-            plt.show()
-            print(config["iterationStop"])
 
         # Let's check if the segment intersect something
+        if config["iteration"] == config["iterationStop"]:
+            # TODO remove Before BENCH
+
+            drawApplyLocalCase(minSegment, closeSegments)
+            print(config["iteration"])
 
         for midPoint in closeSegments:
 
             closeSegment = midPoint.data
-
-            # The minSegment will always be connected to its parent. This is okay but we need to check this.
-            # It could be the case that the start point have generated a new crossing or have connected to a
-            # crossing. Then we shouldn't accept this segment.
-            dist, correspondingLinePoint, tValue = closeSegment.getClosestPointOnSegment(minSegment.p)
-            if dist <= 0.001:
-
-                d1 = closeSegment.getDirectionVector().setLength(1)
-                d2 = minSegment.getDirectionVector().setLength(1)
-
-                if tValue < config["distanceToCrossingThreshold"]:
-                    # tValue = 0. The starting point of the minSegment is very close to start with another street
-
-                    sameDirectionValue = 1 - d1.dotProduct(d2)
-                    nConnectionToStreets += 1
-
-                elif abs(tValue - 1) < config["distanceToCrossingThreshold"]:
-                    # tValue = 1. The starting point of the minSegment is very close to end with another street
-
-                    d1.scale(-1)
-                    sameDirectionValue = 1 - d1.dotProduct(d2)
-                    nConnectionToStreets += 1
-
-                else:
-                    return False
-
-                if sameDirectionValue < config["sameDirectionThreshold"] or \
-                        nConnectionToStreets > config["okNumberOfStreetConnections"]:
-                    return False
-
             # The segment is intersection existing road
-            newPoint = closeSegment.intersection(minSegment)
+            newPoint, tCloseSegment, tMinSegment = closeSegment.intersection(minSegment)
+
             if newPoint:
                 if newPoint != minSegment.p:  # It's okey if to segments share first node.
 
                     distanceNewPoint = minSegment.p.distanceTo(newPoint)
+
                     if distanceNewPoint < bestPointDistance or prioValue != 3:
 
-                        dist, correspondingLinePoint, tValue = closeSegment.getClosestPointOnSegment(newPoint)
-
-                        if tValue < 0.25:
+                        if tCloseSegment < 0.35:
                             newPoint = closeSegment.p
 
-                        if tValue > 0.75:
+                        elif tCloseSegment > 0.65:
                             newPoint = closeSegment.q
 
                         bestPointDistance = distanceNewPoint
@@ -403,12 +386,10 @@ def applyLocalConstraints(minSegment, segments, legalAreaMap):
 
                     prioValue = 3
 
-            # The end points is close to a crossing.
-
-            if prioValue < 3:
+            if prioValue <= 2:
 
                 # TODO ADD limit crossing limit size.
-
+                # The end points is close to a crossing.
                 pDistance = closeSegment.p.distanceTo(minSegment.q)
                 qDistance = closeSegment.q.distanceTo(minSegment.q)
 
@@ -434,7 +415,7 @@ def applyLocalConstraints(minSegment, segments, legalAreaMap):
 
                 # Check if we can extend the road.
 
-                if prioValue < 1:
+                if prioValue <= 1:
                     dist, newPoint, tValue = closeSegment.getClosestPointOnSegment(minSegment.q)
                     if dist < segmentLength * config["okToExtendFactor"]:
                         if newPoint != minSegment.p:
@@ -447,38 +428,71 @@ def applyLocalConstraints(minSegment, segments, legalAreaMap):
                                 bestPoint = newPoint
                                 prioValue = 1
 
-        if minSegment.p.distanceTo(bestPoint) > config["normalLength"] * config["streetMinLength"]:
-
-            if prioValue == 2:
-                # TODO Could be the case that we connect to a crossing with to many street then we should remove this segement.
-                pass
+        if minSegment.p.distanceTo(bestPoint) > (config["normalLength"] * config["streetMinLength"]):
 
             minSegment.q = bestPoint
 
             if config["iteration"] == config["iterationStop"]:
-                print(config["iterationStop"])
-                plt.clf()
-                drawLine(minSegment.p, minSegment.q, (1, 1), "blue")
-                m = minSegment.getMidPoint()
-                plt.plot(m.x, m.y, "blue", marker='o', markersize=3)
-                for midPoint in closeSegments:
-                    closeSegment = midPoint.data
-                    color = "#448700" if closeSegment.highway else "#ffaa00"
-                    drawLine(closeSegment.p, closeSegment.q, (1, 1), color)
-                    m = closeSegment.getMidPoint()
-                    plt.plot(m.x, m.y, color, marker='o', markersize=3)
+                # TODO remove Before BENCH
+                drawApplyLocalCase(minSegment, closeSegments)
 
-                    dirPoint = closeSegment.getDirectionVector().setLength(0.005)
-                    dirPoint.x += closeSegment.p.x
-                    dirPoint.y += closeSegment.p.y
-                    plt.plot(dirPoint.x, dirPoint.y, "red", marker='o', markersize=3, zorder=12)
+            minSegmentDir = minSegment.getDirectionVector().setLength(1)
+            nStreetConnectionsP = 0
+            nStreetConnectionsQ = 0
+            sameDirectionValue = 2.0
 
-                plt.show()
+            minDist = segmentLength * 0.2
+            ## TODO CONFIG VALUE. You could experiment with this
+
+            for midPoint in closeSegments:
+
+                closeSegment = midPoint.data
+
+                # The minSegment will always be connected to its parent. This is okay but we need to check this.
+                # It could be the case that the start point have generated a new crossing or have connected to a
+                # crossing. Then we shouldn't accept this segment.
+                dist, correspondingLinePoint, tValue = closeSegment.getClosestPointOnSegment(minSegment.p)
+                if dist <= minDist:
+
+                    nStreetConnectionsP += 1
+
+                    closeSegmentDir = closeSegment.getDirectionVector().setLength(1)
+
+                    angleForward = mt.acos(clamp(closeSegmentDir.dotProduct(minSegmentDir), -0.999, 0.999))
+                    # THIS IS IN RADIANS
+                    angleBackward = mt.pi - angleForward
+
+                    forwardCondition = (angleForward > config["sameDirectionThreshold"] or tValue > 0.999)
+                    backwardCondition = (angleBackward > config["sameDirectionThreshold"] or tValue < 0.001)
+
+                    # tValue > 0.5. The starting point of the minSegment is very close to an end with another street
+
+                    if (not (forwardCondition and backwardCondition)) or nStreetConnectionsP >= config[
+                        "okNumberOfStreetConnections"]:
+                        return False
+
+                dist, correspondingLinePoint, tValue = closeSegment.getClosestPointOnSegment(minSegment.q)
+
+                if dist <= minDist:
+
+                    nStreetConnectionsQ += 1
+
+                    closeSegmentDir = closeSegment.getDirectionVector().setLength(1)
+
+                    angleForward = mt.acos(clamp(closeSegmentDir.dotProduct(minSegmentDir), -0.999, 0.999))
+                    # THIS IS IN RADIANS
+                    angleBackward = mt.pi - angleForward
+
+                    forwardCondition = (angleForward > config["sameDirectionThreshold"] or tValue < 0.001)
+                    backwardCondition = (angleBackward > config["sameDirectionThreshold"] or tValue > 0.999)
+
+                    # tValue > 0.5. The starting point of the minSegment is very close to an end with another street
+
+                    if (not (forwardCondition and backwardCondition)) or nStreetConnectionsQ >= config[
+                        "okNumberOfStreetConnections"]:
+                        return False
 
             return True
-
-    # make checks if the area is okey
-    # THe area is okay, let's check if we need to connect to anything.
 
     return False
 
@@ -494,7 +508,9 @@ def globalGoalsGenerate(minItem, popMap):
     newSegments = []
 
     # TODO add config value
-    if popMap.sampleOnPoint(minSegment.q) <= (config["populationThreshold"] - 0.15 if minSegment.highway else 0.15):
+
+    if popMap.sampleOnPoint(minSegment.q) <= (config["populationThreshold"] + (-0.15 if minSegment.highway else 0.15)):
+
         return newSegments
 
     directionVector = minSegment.getDirectionVector().setLength(
@@ -558,11 +574,9 @@ def generateNetwork():
     maxNSegments = config["numberOfSegments"]
     segments = SegmentsContainer()
     popMap = Texture("textures/noise/simplex.png")
-    waterMap = Texture("textures/water/stockHolmMask.png")
+    #waterMap = Texture("textures/water/stockHolmMask.png")
+    waterMap = Texture("")
     Q = PriorityQueue()
-
-    plt.imshow(cv2.resize(waterMap.map, popMap.map.shape), cmap="gray")
-    #plt.imshow(np.multiply(popMap.map, cv2.resize(waterMap.map, popMap.map.shape)), cmap="gray")
 
     startTime = tm.time()
     Q.pushAll(makeInitialSegments())
@@ -620,6 +634,9 @@ def generateNetwork():
     if not config["gifModeOn"]:
         for s in segments.allSegments:
             drawLine(s.p, s.q, (popMap.dimX, popMap.dimY), "#087800" if s.highway else "#ffaa00")
+
+    # plt.imshow(cv2.resize(waterMap.map, popMap.map.shape), cmap="gray")
+    plt.imshow(np.multiply(popMap.map, cv2.resize(waterMap.map, popMap.map.shape)), cmap="gray")
 
     plt.show()
 
@@ -775,7 +792,10 @@ def testingLocalConstrains():
 def testingLocalConstrains2():
     ## THIS IS a case where the function fails.
 
-    config["iteration"] = config["iterationStop"]
+    config["iteration"] = 500000
+    # config["iteration"] = config["iterationStop"]
+
+    waterMap = Texture()
 
     NL = config["normalLength"]
     segments = SegmentsContainer()
@@ -793,7 +813,45 @@ def testingLocalConstrains2():
 
     testSegment = Segment(origin.addVector(ExtendedPoint(0, -NL)), origin)
 
-    print(applyLocalConstraints(testSegment, segments))
+    print(applyLocalConstraints(testSegment, segments, waterMap))
+
+
+def generateNetworkNoPlotWithProfiling():
+    # road&query  ra = Road Attribute, qa = Query attribute, I guess?
+
+    maxNSegments = config["numberOfSegments"]
+    segments = SegmentsContainer()
+    popMap = Texture("textures/noise/simplex.png")
+    # waterMap = Texture("textures/water/stockHolmMask.png")
+    waterMap = Texture("")
+    Q = PriorityQueue()
+
+    # In outer section of code
+    pr = profile.Profile()
+    pr.disable()
+    pr.enable()
+
+    Q.pushAll(makeInitialSegments())
+
+    n = maxNSegments
+    for i in range(n):
+
+        if Q.empty():
+            break
+
+        minItem = Q.pop()
+        minSegment = minItem.data
+        accepted = applyLocalConstraints(minSegment, segments, waterMap)
+        if accepted:
+            segments.addSegment(minSegment)
+            # addZeroToThreeRoadsUsingGlobalGoals(Q, t+1, qa,ra)
+            # We need to increment t+1, t will be minSegment.T
+            Q.pushAll(globalGoalsGenerate(minItem, popMap))
+
+    pr.disable()
+    pr.dump_stats('profile.pstat')
+
+    return segments
 
 
 if __name__ == '__main__':
@@ -803,17 +861,8 @@ if __name__ == '__main__':
     #     generateNetwork()
 
     rd.seed(config["seed"])
+    #generateNetworkNoPlotWithProfiling()
     generateNetwork()
-    # testingLocalConstrains2()
 
-    # # In outer section of code
-    # pr = profile.Profile()
-    # pr.disable()
-    #
-    # # In section you want to profile
-    # pr.enable()
-    #
-    # pr.disable()
-    #
-    # # Back in outer section of code
-    # pr.dump_stats('profile.pstat')
+
+
