@@ -570,7 +570,7 @@ def globalGoalsGenerate(minItem, popMap):
 
 def generateNetwork():
     # road&query  ra = Road Attribute, qa = Query attribute, I guess?
-    fig = plt.figure(frameon=False, figsize=(7, 7), dpi=250)
+    fig = plt.figure(frameon=False, figsize=(7, 7), dpi=180)
     plt.axis('off')
 
     maxNSegments = config["numberOfSegments"]
@@ -639,7 +639,7 @@ def generateNetwork():
 
     # plt.imshow(cv2.resize(waterMap.map, popMap.map.shape), cmap="gray")
 
-    plt.savefig("outputImg/systemFinalOutput/finalOutPut_{}.png".format(tm.ctime()), bbox_inches='tight', transparent=True, pad_inches=0)
+    plt.savefig("outputImg/systemFinalOutput/finalOutPut_{}.png".format(tm.ctime()).replace(' ', "_").replace(':', '-'), bbox_inches='tight', pad_inches=0)
     plt.show()
 
     if config["gifModeOn"]:
@@ -864,8 +864,8 @@ if __name__ == '__main__':
 
     rd.seed(config["seed"])
     #generateNetworkNoPlotWithProfiling()
-    makeGif(3500)
-    #generateNetwork()
+    #makeGif(3500)
+    generateNetwork()
 
 
 

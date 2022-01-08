@@ -22,7 +22,7 @@
   "branchingNoise": 3.5,
 
   "onlyHighway": false,
-  "gifModeOn": true,
+  "gifModeOn": false,
   "gifSpeed": 1,
   "iteration": 1,
   "iterationStop":60000,

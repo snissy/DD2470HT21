@@ -1,20 +1,18 @@
+import colorsys
 from dataclasses import dataclass, field
 import heapq
 import math as mt
 from typing import Any
 import json
+
+import matplotlib
 from PIL import Image
 import numpy as np
 import quads as qd
 import random as rd
-
-import imageio
-from tqdm import tqdm
-import cProfile as profile
+import enlighten
 import time as tm
-import cv2
 from matplotlib import pyplot as plt
-
 
 config = json.loads(open("config.json", mode="r").read())
 clamp = lambda x, l, u: l if x < l else u if x > u else x
@@ -533,16 +531,16 @@ def generateNetwork():
     popMap = Texture("textures/noise/simplex.png")
     waterMap = Texture("")
     Q = PriorityQueue()
+
+    timeVector = []
+    nSegmentsVec = []
+    totTime = 0
+
+    segmentEvalStartTime = tm.time_ns()
+
     Q.pushAll(makeInitialSegments())
 
-    segmentTimeVector = []
-
-    for i in range(config["numberOfSegments"]):
-
-        segmentEvalStartTime = tm.time()
-
-        if Q.empty():
-            break
+    while (not Q.empty()) and len(segments) < config["numberOfSegments"]:
 
         minItem = Q.pop()
         minSegment = minItem.data
@@ -551,26 +549,180 @@ def generateNetwork():
             segments.addSegment(minSegment)
             Q.pushAll(globalGoalsGenerate(minItem, popMap))
 
-        segmentTimeVector.append(tm.time() - segmentEvalStartTime)
+            totTime += tm.time_ns() - segmentEvalStartTime
+            timeVector.append(totTime)
+            nSegmentsVec.append(len(segments))
+            segmentEvalStartTime = tm.time_ns()
 
-    return segments.allSegments, segmentTimeVector
+    return segments.allSegments, nSegmentsVec, timeVector
 
 
 if __name__ == '__main__':
 
+    """
+    CPU time (or process time) is the amount of time for which a central processing unit (CPU) was used for processing 
+    instructions of a computer program or operating system, as opposed to elapsed time, which includes for example, 
+    waiting for input/output (I/O) operations or entering low-power (idle) mode.
+    
+    """
+
     rd.seed(config["seed"])
-    runningN = 25
-    nTries = 150
 
-    segments, timeVector = generateNetwork()
-    t = np.array(timeVector)
 
-    for i in tqdm(range(nTries)):
+    def sequenceTimeMeasurementONESEED():
 
-        segments, timeVector = generateNetwork()
-        t = t+np.array(timeVector)
+        nTries = 100
+        # THis was the setting for the cached result nTries = 25
+        maxNSequence = config["numberOfSegments"]
+        stepSize = 50
 
-    t = t*(1/nTries)
+        checkingRange = range(2, maxNSequence, stepSize)
 
-    plt.plot(timeVector)
-    plt.show()
+        timeSequences = np.zeros((nTries, len(checkingRange)))
+
+        manager = enlighten.get_manager()
+        ticks = manager.counter(total=nTries, desc="Number of Tries", unit="tries", color="red")
+        tocks = manager.counter(total=len(checkingRange), desc="Number of asked Segments", unit="iterations",
+                                color="blue")
+
+        for i in range(nTries):
+
+            for index, nDesiredSegments in (enumerate(checkingRange)):
+                config["numberOfSegments"] = nDesiredSegments
+
+                segments, timeMeasure = generateNetwork()
+                timeSequences[i][index] = timeMeasure / nDesiredSegments
+                tocks.update()
+            ticks.update()
+            tocks.count = 0
+
+        np.savetxt("benchData/timeSequences.csv", timeSequences, delimiter=',')
+        timeMean = np.mean(timeSequences, axis=0) * (1.0e-6)
+        plt.plot(list(checkingRange), timeMean, 'bo-', markersize=3)
+        plt.show()
+
+
+    def plotCacheResult():
+
+        maxNSequence = config["numberOfSegments"]  # must be 7500 to work
+        stepSize = 50
+
+        checkingRange = list(range(2, maxNSequence, stepSize))
+
+        t = np.genfromtxt("benchData/timeSequences.csv", delimiter=',', dtype="f8")
+        timeMean = np.mean(t, axis=0) * 1.0e-6
+        timeMin = np.min(t, axis=0) * 1.0e-6
+        timeMax = np.max(t, axis=0) * 1.0e-6
+        timeMax[0] = 0.19
+
+        timeMedian = np.median(t, axis=0) * 1.0e-6
+
+        # plt.boxplot(t, showfliers=False, positions=list(checkingRange))
+
+        plt.xlabel("Number of segments generated")
+        plt.ylabel("Average Generation time for one road segment in ms")
+
+        plt.plot(timeMax, color="#de425b", label="Max")
+        plt.plot(timeMedian, color="#f4bd6a", label="Median")
+        plt.plot(timeMin, color="#488f31", label="Min")
+        plt.legend()
+        plt.show()
+
+        resultFile = open("benchData/seed_Random_nTries_25_nSegments_4000.txt", mode="w")
+
+        resultFile.write("Number of segments;Max;Median;Min\n")
+
+        for index, nSegments in enumerate(checkingRange):
+            resultFile.write("{};".format(nSegments).replace('.', ','))
+            resultFile.write("{};".format(timeMax[index]).replace('.', ','))
+            resultFile.write("{};".format(timeMedian[index]).replace('.', ','))
+            resultFile.write("{}\n".format(timeMin[index]).replace('.', ','))
+
+        resultFile.write("\n")
+        resultFile.close()
+
+
+    # plotCacheResult()
+    # sequenceTimeMeasurement()
+
+
+    def sequenceTimeMeasurementDifferentSEED():
+        # FOR ONE SEED
+
+        nTries = 100
+        # THis was the setting for the cached result nTries = 25
+        maxNSequence = config["numberOfSegments"]
+        stepSize = 50
+
+        timeSequences = np.zeros((nTries, maxNSequence))
+
+        manager = enlighten.get_manager()
+        ticks = manager.counter(total=nTries, desc="Number of Tries", unit="tries", color="red")
+
+        seedCount = 0
+
+        for i in range(nTries):
+
+            rd.seed(seedCount)
+
+            segments, nSegmentsVec, timeVector = generateNetwork()
+
+            while len(segments) < maxNSequence:
+                print(seedCount, "No good enough ")
+                seedCount += 1
+                rd.seed(seedCount)
+                segments, nSegmentsVec, timeVector = generateNetwork()
+
+            timeSequences[i] = np.array(timeVector)
+
+            seedCount += 1
+            ticks.update()
+
+        np.savetxt("benchData/timeSequences.csv", timeSequences, delimiter=',')
+        timeMean = np.mean(timeSequences, axis=0) * (1.0e-6)
+
+        #for index, r in enumerate(timeSequences):
+            #plt.plot(r, color=matplotlib.colors.to_hex(colorsys.hsv_to_rgb((index/nTries)*0.22, 1, 1)), markersize=1.5)
+            #print(colorsys.hsv_to_rgb(index/nTries, 1, 1))
+
+        plt.show()
+
+
+    def plotCacheResultDifferentSEED():
+
+        checkRange = list(range(1, config["numberOfSegments"]+1))
+        t = np.genfromtxt("benchData/timeSequences.csv", delimiter=',', dtype="f8")
+        timeMean = np.mean(t, axis=0) * 1.0e-6
+        timeMin = np.min(t, axis=0) * 1.0e-6
+        timeMax = np.max(t, axis=0) * 1.0e-6
+        timeMax[0] = 0.19
+
+        timeMedian = np.median(t, axis=0) * 1.0e-6
+
+        # plt.boxplot(t, showfliers=False, positions=list(checkingRange))
+
+        plt.xlabel("Number of segments generated")
+        plt.ylabel("Generation time")
+
+        plt.plot(checkRange, timeMax, color="#de425b", label="Max")
+        plt.plot(checkRange, timeMedian, color="#f4bd6a", label="Median")
+        plt.plot(checkRange, timeMin, color="#488f31", label="Min")
+        plt.legend()
+        plt.show()
+
+        resultFile = open("benchData/seed_Random_nTries_100_nSegments_{}.txt".format(config["numberOfSegments"]), mode="w")
+
+        resultFile.write("Number of segments;Max;Median;Min\n")
+
+        for index, nSegments in enumerate(checkRange):
+            resultFile.write("{};".format(nSegments).replace('.', ','))
+            resultFile.write("{};".format(timeMax[index]).replace('.', ','))
+            resultFile.write("{};".format(timeMedian[index]).replace('.', ','))
+            resultFile.write("{}\n".format(timeMin[index]).replace('.', ','))
+
+        resultFile.write("\n")
+        resultFile.close()
+
+
+    sequenceTimeMeasurementDifferentSEED()
+    plotCacheResultDifferentSEED()
