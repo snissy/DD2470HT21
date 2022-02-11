@@ -3,6 +3,8 @@ import heapq
 import math as mt
 from typing import Any
 import json
+
+import quads
 from PIL import Image
 import numpy as np
 import quads as qd
@@ -12,7 +14,7 @@ import imageio
 from tqdm import tqdm
 import cProfile as profile
 import time as tm
-import cv2
+import cv2 as cv2
 
 config = json.loads(open("config.json", mode="r").read())
 
@@ -76,7 +78,6 @@ class Segment:
         self.highway = highway
 
     def getDirectionVector(self):
-
         newPoint = ExtendedPoint(self.q.x - self.p.x, self.q.y - self.p.y)
         return newPoint
 
@@ -211,7 +212,7 @@ class SegmentsContainer:
 
     def __init__(self):
         self.allSegments = []
-        self.tree = qd.QuadTree((0.5, 0.5), 1, 1)
+        self.tree = qd.QuadTree((0.5, 0.5), 1, 1, capacity=int(config["pointCapacity"]))
 
     def addSegment(self, s):
         self.allSegments.append(s)
@@ -224,17 +225,16 @@ class SegmentsContainer:
 
     def getCloseSegments(self, segment):
         # ((5)^(1/2)/2) = 1.1180 <= 1.12
-        point = segment.getMidPoint()
+        point = segment.q
         sLength = self.highwaySearchLength if segment.highway else self.normalSearchLength
 
-        minX = point.x - sLength
-        maxX = point.x + sLength
-        minY = point.y - sLength
-        maxY = point.y + sLength
+        minX = point.x - 0.3*sLength
+        maxX = point.x + 1.3*sLength
+        minY = point.y - 0.3*sLength
+        maxY = point.y + 1.3*sLength
         pointBB = qd.BoundingBox(minX, minY, maxX, maxY)
 
-        res = self.tree.within_bb(pointBB)
-        return res
+        return self.tree.within_bb(pointBB)
 
 
 class Texture:
@@ -570,7 +570,7 @@ def globalGoalsGenerate(minItem, popMap):
 
 def generateNetwork():
     # road&query  ra = Road Attribute, qa = Query attribute, I guess?
-    fig = plt.figure(frameon=False, figsize=(7, 7), dpi=180)
+    fig = plt.figure(frameon=False, figsize=(6, 6), dpi=120)
     plt.axis('off')
 
     maxNSegments = config["numberOfSegments"]
@@ -585,6 +585,7 @@ def generateNetwork():
 
     # plt.xlim([248, 272])
     # plt.ylim([72, 89])
+
     plt.imshow(np.multiply(popMap.map, cv2.resize(waterMap.map, popMap.map.shape)), cmap="gray")
     # while (not Q.empty()) and (len(segments) < maxNSegments):
     n = maxNSegments
@@ -624,16 +625,17 @@ def generateNetwork():
         # drawSegments(segments, i)
         # for s in Q.getAllData():drawLine(s.p, s.q, "orange")
 
-        if config["gifModeOn"]:
+        if config["gifModeOn"] and i % config["gifSpeed"] == 0:
             plt.title("Iteration: {}".format(i), fontsize=12)
             plt.savefig("outputImg/roadGeneration-iter-{}".format(i), bbox_inches='tight', transparent=True, pad_inches=0)
 
         # if i == 30:
         #     plt.show()
 
-    print("The system generated the network on {} seconds".format((round(tm.time() - startTime, 3))))
+    print("The system generated the network on {} seconds with pointCapcity in quadTree: {}".format((round(tm.time() - startTime, 3)),config["pointCapacity"]))
 
     if not config["gifModeOn"]:
+
         for s in segments.allSegments:
             drawLine(s.p, s.q, (popMap.dimX, popMap.dimY), "#087800" if s.highway else "#ffaa00")
 
@@ -641,6 +643,8 @@ def generateNetwork():
 
     plt.savefig("outputImg/systemFinalOutput/finalOutPut_{}.png".format(tm.ctime()).replace(' ', "_").replace(':', '-'), bbox_inches='tight', pad_inches=0)
     plt.show()
+
+    plt.clf()
 
     if config["gifModeOn"]:
         makeGif(n)
@@ -650,7 +654,7 @@ def generateNetwork():
     #
 
 
-def drawLine(p1, p2, dimsFactors, c='black', order=10, width=1.5):
+def drawLine(p1, p2, dimsFactors=(10.0, 10.0), c='black', order=10, width=1.5):
     x_values = [p1.x * dimsFactors[0], p2.x * dimsFactors[0]]
     y_values = [p1.y * dimsFactors[1], p2.y * dimsFactors[1]]
     plt.plot(x_values, y_values, c, marker='o', zorder=order, markersize=config["markerSize"], linewidth=width)
@@ -679,7 +683,8 @@ def makeGif(iterations):
 def checkLineSegmentQuery():
     for ii in range(5):
         # generateNetwork()
-        nSegments = 5000
+
+        nSegments = 2500
         segments = SegmentsContainer()
         p = ExtendedPoint(rd.random(), rd.random())
         q = ExtendedPoint(rd.random(), rd.random())
@@ -691,8 +696,8 @@ def checkLineSegmentQuery():
         checkPoint = q
         checkSegment = Segment(startPoint, checkPoint)
 
-        drawLine(startPoint, checkPoint, "blue")
-        plt.plot(checkPoint.x, checkPoint.y, 'ro', markersize=1)
+        drawLine(startPoint, checkPoint, c="blue")
+        plt.plot(checkPoint.x*10, checkPoint.y*10, 'ro', markersize=1)
 
         for i in range(nSegments):
             p = ExtendedPoint(rd.random(), rd.random())
@@ -701,9 +706,11 @@ def checkLineSegmentQuery():
             norm = (1 / (qp.x ** 2 + qp.y ** 2) ** (1 / 2)) * config["normalLength"]
             q = ExtendedPoint(p.x + qp.x * norm, p.y + qp.y * norm)
             newSegment = Segment(p, q)
-            segments.addSegment(newSegment)
 
-        closeSegments = segments.getCloseSegments(checkPoint)
+            if segmentWithinLimit(newSegment):
+                segments.addSegment(newSegment)
+
+        closeSegments = segments.getCloseSegments(checkSegment)
 
         for s in segments.allSegments:
 
@@ -714,15 +721,15 @@ def checkLineSegmentQuery():
 
                     if checkSegment.intersection(closeS.data):
 
-                        drawLine(s.p, s.q, "r")
+                        drawLine(s.p, s.q,c= "r")
 
                     else:
-                        drawLine(s.p, s.q, "y")
+                        drawLine(s.p, s.q,c= "y")
 
                     ok = True
 
             if not ok:
-                drawLine(s.p, s.q, "g")
+                drawLine(s.p, s.q, c="g")
 
         plt.show()
 
@@ -856,16 +863,19 @@ def generateNetworkNoPlotWithProfiling():
     return segments
 
 
+
 if __name__ == '__main__':
     # for i in range(100):
     #     print(i)
     #     rd.seed(i)
     #     generateNetwork()
+    
 
     rd.seed(config["seed"])
-    #generateNetworkNoPlotWithProfiling()
-    #makeGif(3500)
+
     generateNetwork()
+    #generateNetworkNoPlotWithProfiling()
+    #checkLineSegmentQuery()
 
 
 

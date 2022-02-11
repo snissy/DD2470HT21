@@ -1,7 +1,13 @@
+import time
+
 import numpy as np
 import random as rd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from scipy.stats import wasserstein_distance
+from scipy.stats import norm
+import math as mt
+from skimage.transform import radon, iradon
 
 """
 The code for this file will mostly be based on this blogpost by Stefan Gustavson
@@ -65,7 +71,7 @@ class SimplexNoiseGrid:
         self.generateData()
 
     def generateData(self):
-        for f, amp in tqdm(self.freq_amp):
+        for f, amp in self.freq_amp:
             self.lattices_points = LatticePoints()
             self.data += np.array(
                 [[self.__calcPoint(r / f, c / f) * amp for c in self.pWidth_range] for r in
@@ -126,21 +132,142 @@ class SimplexNoiseGrid:
         return self.data
 
 
-if __name__ == '__main__':
-    t = SimplexNoiseGrid(250, 250)
-    data = t.getData()
+def NormalizeData(data):
+    return (data - np.min(data)) / (np.max(data) - np.min(data))
 
-    # Normalised [0,1]
-    data = (data - np.min(data)) / np.ptp(data)
-    data = np.power(data, 0.75)
-    plt.imshow(data, cmap="gray")
 
-    # data = np.exp(data-1)*np.abs(np.sin(data*2*np.pi*8))
-    # data = 1 - np.power((np.cos(data*np.pi*2*20)+1)/2, 5)
-    #data = 1 - np.power((np.cos(np.pi + data*np.pi*50)+1)/2, 100)
-    #plt.imshow(data, cmap="gray")
+def DataOnlyPositiv(data):
+    return data - np.min(data)
 
-    plt.axis('off')
-    plt.savefig("textures/noise/simplex.png", bbox_inches='tight', transparent=True, pad_inches=0)
+
+def setSum_toOne(data):
+    return data / np.sum(data)
+
+
+def oneDimensionWasserSteain(n):
+    res = []
+    rd.seed(int(time.time()))
+
+    seed = rd.randint(0, 10000000000000000000)
+    rd.seed(seed)
+
+    for i in tqdm(range(n)):
+        seed += 1
+        rd.seed(seed)
+        tV = SimplexNoiseGrid(1, 50).getData()
+        tU = SimplexNoiseGrid(1, 50).getData()
+
+        testV = NormalizeData(tV[:, 0])
+        cdfTESTV = np.cumsum(testV)
+        cdfTESTV *= (1 / np.max(cdfTESTV))
+
+        testU = NormalizeData(tU[:, 0])
+        cdfTESTU = np.cumsum(testU)
+        cdfTESTU *= (1 / np.max(cdfTESTU))
+
+        wDistance = wasserstein_distance(cdfTESTV, cdfTESTU)
+
+        res.append((wDistance, testV, testU))
+
+    wDistance, testV, testU = max(res, key=lambda e: e[0])
+
+    cdfTESTV = np.cumsum(testV)
+    cdfTESTV *= (1 / np.max(cdfTESTV))
+    cdfTESTU = np.cumsum(testU)
+    cdfTESTU *= (1 / np.max(cdfTESTU))
+
+    fig, (ax1, ax2) = plt.subplots(2)
+    fig.suptitle('Wasserstein distance:  {}'.format(round(wDistance, 5)), fontsize=16)
+
+    ax1.plot(testV, c="blue")
+    ax1.plot(testU, c="red")
+
+    ax2.plot(cdfTESTV, c="blue")
+    ax2.plot(cdfTESTU, c="red")
+    plt.show()
+
+    wDistance, testV, testU = min(res, key=lambda e: e[0])
+    cdfTESTV = np.cumsum(testV)
+    cdfTESTV *= (1 / np.max(cdfTESTV))
+    cdfTESTU = np.cumsum(testU)
+    cdfTESTU *= (1 / np.max(cdfTESTU))
+
+    fig, (ax1, ax2) = plt.subplots(2)
+    fig.suptitle('Wasserstein distance:  {}'.format(round(wDistance, 5)), fontsize=16)
+
+    ax1.plot(testV, c="blue")
+    ax1.plot(testU, c="red")
+
+    ax2.plot(cdfTESTV, c="blue")
+    ax2.plot(cdfTESTU, c="red")
+    plt.show()
+
+
+def twoDimesionWasserStein(n):
+    res = []
+    rd.seed(int(time.time()))
+    seed = rd.randint(0, 10000000000000000000)
+    rd.seed(seed)
+
+    tV = SimplexNoiseGrid(45, 45).getData()
+    tV = DataOnlyPositiv(tV)
+    tV = tV * (1 / np.sum(tV))
+
+    for i in tqdm(range(n)):
+        seed += 1
+        rd.seed(seed)
+        tU = SimplexNoiseGrid(45, 45).getData()
+
+        tU = DataOnlyPositiv(tU)
+        tU = tU * (1 / np.sum(tU))
+
+        def sliced_wasserstein(X, Y, num_proj):
+            eWasserstein = []
+            for _ in range(num_proj):
+                # sample uniformly from the unit spher
+
+                theta = [rd.random() * 360]
+
+                X_proj = radon(X, theta)
+                X_proj = np.cumsum(X_proj)
+                X_proj *= (1 / np.max(X_proj))
+
+                Y_proj = radon(Y, theta)
+                Y_proj = np.cumsum(Y_proj)
+                Y_proj *= (1 / np.max(Y_proj))
+
+                # compute 1d wasserstein
+                eWasserstein.append(wasserstein_distance(X_proj, Y_proj))
+            return np.mean(eWasserstein)
+
+        wD = sliced_wasserstein(tV, tU, 550)
+
+        res.append((wD, tV, tU))
+
+    wDistance, tV, tU = max(res, key=lambda e: e[0])
+
+    fig, (ax1, ax2) = plt.subplots(2)
+    fig.suptitle('Wasserstein distance:  {}'.format(round(wDistance, 5)), fontsize=16)
+    print(np.sum(np.abs(tV - tU)))
+    ax1.imshow(tV)
+    ax2.imshow(tU)
 
     plt.show()
+
+    wDistance, tV, tU = min(res, key=lambda e: e[0])
+
+    fig, (ax1, ax2) = plt.subplots(2)
+    fig.suptitle('Wasserstein distance:  {}'.format(round(wDistance, 5)), fontsize=16)
+
+    print(np.sum(np.abs(tV - tU)))
+    ax1.imshow(tV)
+    ax2.imshow(tU)
+
+    plt.show()
+
+
+if __name__ == '__main__':
+
+    #twoDimesionWasserStein(250)
+
+    twoDimesionWasserStein(15500)

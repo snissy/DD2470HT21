@@ -1,6 +1,6 @@
 {
-  "seed": 1,
-  "numberOfSegments": 5000,
+  "seed": 1337,
+  "numberOfSegments": 7500,
   "twoStartSegment": true,
   "highwayLength" : 0.047,
   "normalLength": 0.015,
@@ -21,9 +21,11 @@
   "normalNewBranchProbability": 0.65,
   "branchingNoise": 3.5,
 
+  "pointCapacity": 30,
+
   "onlyHighway": false,
   "gifModeOn": false,
-  "gifSpeed": 1,
+  "gifSpeed": 75,
   "iteration": 1,
   "iterationStop":60000,
   "drawNoneAcceptableSegments":false,
